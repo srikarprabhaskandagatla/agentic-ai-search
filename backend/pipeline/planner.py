@@ -1,9 +1,9 @@
-# Stage 1 - Planner  (uses Groq / Llama 3.3 70B)
+# Stage 1 - Planner  (uses Cerebras / Llama 3.3 70B)
 
 from __future__ import annotations
 import json, re, logging
 
-from groq import AsyncGroq
+from cerebras.cloud.sdk import AsyncCerebras
 from ..models import SearchPlan
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,9 @@ Respond with ONLY a JSON object - no markdown, no extra text:
 }"""
 
 
-async def plan_search(client: AsyncGroq, query: str) -> SearchPlan:
+async def plan_search(client: AsyncCerebras, query: str) -> SearchPlan:
     response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="qwen-3-235b-a22b-instruct-2507",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Plan a structured search for: {query}"},
