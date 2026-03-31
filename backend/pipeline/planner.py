@@ -1,4 +1,5 @@
-# Stage 1 - Planner  (uses Cerebras / Llama 3.3 70B)
+# Stage 1 - Planner
+# Plans a structured search based on the initial query, defining entity type, columns, and search queries.
 
 from __future__ import annotations
 import json, re, logging
