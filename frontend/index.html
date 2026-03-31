@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic Search - CIIR</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+  <script src="script.js"></script>
+
+  <!-- ──────────────────────────── HEADER ──────────────────────────── -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+        </div>
+        <div>
+          <span class="font-700 text-slate-900 text-base font-semibold">Agentic Search</span>
+          <span class="text-slate-400 text-xs ml-2">CIIR Challenge</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="toggleSettings()"
+          class="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          API Settings
+        </button>
+        <a href="https://github.com" target="_blank"
+          class="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+    <!-- Settings panel -->
+    <div id="settingsPanel" class="hidden border-t border-slate-200 bg-slate-50 px-6 py-3">
+      <div class="max-w-xl flex items-center gap-3">
+        <label class="text-xs font-medium text-slate-600 whitespace-nowrap">Backend URL</label>
+        <input id="apiUrlInput" type="text" placeholder="http://localhost:8000"
+          class="flex-1 text-xs border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 mono"
+          onchange="saveApiUrl()" />
+        <button onclick="saveApiUrl(true)"
+          class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition">Save</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ──────────────────────────── MAIN ──────────────────────────── -->
+  <main class="max-w-7xl mx-auto px-6 py-8">
+
+    <!-- ── Hero / Query Input ── -->
+    <div class="text-center mb-8">
+      <h1 class="text-3xl font-bold text-slate-900 mb-2">
+        Discover any topic - structured, sourced, searchable.
+      </h1>
+      <p class="text-slate-500 text-sm max-w-xl mx-auto">
+        Enter a topic. The agent searches the web in multiple rounds,
+        extracts structured entities, and traces every value back to its source.
+      </p>
+    </div>
+
+    <div class="max-w-3xl mx-auto mb-6">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div class="flex gap-3">
+          <textarea id="queryInput" rows="2"
+            placeholder="e.g. AI startups in healthcare, top pizza places in Brooklyn, open source database tools…"
+            class="flex-1 resize-none text-slate-800 placeholder-slate-400 focus:outline-none text-sm leading-relaxed"
+            onkeydown="handleKey(event)"></textarea>
+          <div class="flex flex-col gap-2 items-end">
+            <button id="searchBtn" onclick="startSearch()"
+              class="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-sm px-5 py-2 rounded-xl transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+              Search
+            </button>
+            <div class="flex items-center gap-1.5">
+              <label class="text-xs text-slate-400">Rounds</label>
+              <select id="roundsSelect"
+                class="text-xs border border-slate-200 rounded-lg px-2 py-1 text-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                <option value="1">1 (fast)</option>
+                <option value="2" selected>2 (agentic)</option>
+                <option value="3">3 (thorough)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <!-- Example queries -->
+        <div class="flex flex-wrap gap-2 mt-3 pt-3 border-t border-slate-100" id="exampleContainer">
+          <span class="text-xs text-slate-400 self-center">Try:</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Progress Section ── -->
+    <div id="progressSection" class="max-w-3xl mx-auto mb-6 hidden">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+
+        <!-- Stage steps -->
+        <div class="flex items-center mb-5" id="pipelineSteps">
+          <!-- Injected by JS -->
+        </div>
+
+        <!-- Progress bar -->
+        <div id="progressBar" class="mb-3">
+          <div id="progressFill" style="width:0%"></div>
+        </div>
+
+        <!-- Message -->
+        <div class="flex items-center gap-3">
+          <div class="spinner" id="progressSpinner"></div>
+          <div>
+            <div id="progressMessage" class="text-sm font-medium text-slate-700"></div>
+            <div id="progressDetail" class="text-xs text-slate-400 mt-0.5"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Results Section ── -->
+    <div id="resultsSection" class="hidden fade-in">
+      <!-- Header bar -->
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+        <div>
+          <h2 id="resultsTitle" class="text-lg font-semibold text-slate-900"></h2>
+          <p id="resultsMeta" class="text-xs text-slate-400 mt-0.5"></p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="exportJSON()"
+            class="flex items-center gap-1.5 text-xs bg-white border border-slate-300 hover:border-slate-400 text-slate-600 px-3 py-2 rounded-lg transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Export JSON
+          </button>
+          <button onclick="exportCSV()"
+            class="flex items-center gap-1.5 text-xs bg-white border border-slate-300 hover:border-slate-400 text-slate-600 px-3 py-2 rounded-lg transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0119 9.414V19a2 2 0 01-2 2z"/>
+            </svg>
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="table-scroll">
+        <table class="result-table w-full border-collapse bg-white">
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Sources footer -->
+      <div id="sourcesFooter" class="mt-3 text-xs text-slate-400 flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+        </svg>
+        <span id="sourcesText"></span>
+      </div>
+    </div>
+
+    <!-- ── Error Banner ── -->
+    <div id="errorBanner" class="hidden max-w-3xl mx-auto mt-4">
+      <div class="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <svg class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div>
+          <div class="font-medium text-red-700 text-sm">Search failed</div>
+          <div id="errorMessage" class="text-red-600 text-xs mt-1"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ──────────────────────────── SOURCE MODAL ──────────────────────────── -->
+  <div id="sourceModal" onclick="closeModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold text-slate-900 text-sm">Source Attribution</h3>
+        <button onclick="closeSourceModal()"
+          class="text-slate-400 hover:text-slate-700 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+</body>
+</html>
