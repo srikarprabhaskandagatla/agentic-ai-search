@@ -1,24 +1,31 @@
 # Stage 6 — Gap Analyzer  (the "agentic" component)
 
+# After Round 1, we inspect the partially-filled table:
+#   • Which columns have low coverage? (< 50% of entities have a value)
+#   • Which entities have many null cells?
+#   • Are there too few entities overall?
+
+# If there are meaningful gaps, we generate targeted follow-up queries for Round 2.
+# This is what transforms a simple pipeline into a genuine agentic system —
+# the output of one pass feeds back into the search plan for the next pass.
+
 from __future__ import annotations
 import json
 import re
 import logging
 
-from groq import AsyncGroq
+from cerebras.cloud.sdk import AsyncCerebras
 from ..models import Entity, CellValue
 
 logger = logging.getLogger(__name__)
 
 
-
-# Prompt
 _SYSTEM = """You are a data completeness analyst.
 
 You will receive a partially-filled entity table and must:
 1. Identify columns with low coverage (< 50% filled)
 2. Note if there are too few entities (< 8 is usually thin)
-3. Generate 4-6 ENTITY-SPECIFIC search queries to fill the gaps
+3. Generate 4–6 ENTITY-SPECIFIC search queries to fill the gaps
 
 CRITICAL: Do NOT generate broad topic queries like "AI healthcare startup headquarters".
 Instead generate per-entity queries for the specific entities missing data, e.g.:
@@ -42,8 +49,6 @@ and entity count is adequate (>= 8 entities).
 """
 
 
-
-# Coverage calculation
 def _compute_coverage(entities: list[Entity], columns: list[str]) -> dict[str, float]:
     if not entities:
         return {col: 0.0 for col in columns}
@@ -54,24 +59,13 @@ def _compute_coverage(entities: list[Entity], columns: list[str]) -> dict[str, f
     }
 
 
-
-# Public API
 async def analyze_gaps(
-    client: AsyncGroq,
+    client: AsyncCerebras,
     entities: list[Entity],
     columns: list[str],
     original_query: str,
     entity_type: str,
 ) -> dict:
-    """
-    Analyse the current entity table and return gap-filling search queries.
-
-    Returns a dict with keys:
-      gap_queries   : list[str]
-      should_continue : bool
-      gap_summary   : str
-    """
-
     if not entities:
         return {
             "gap_queries": [f"{original_query} list", f"top {original_query}"],
@@ -82,7 +76,6 @@ async def analyze_gaps(
     coverage = _compute_coverage(entities, columns)
     avg_coverage = sum(coverage.values()) / len(coverage) if coverage else 0.0
 
-    # Fast path: if coverage is already good, skip the LLM call
     if avg_coverage >= 0.70 and len(entities) >= 8:
         logger.info("Coverage %.0f%% — skipping gap analysis", avg_coverage * 100)
         return {
@@ -91,10 +84,8 @@ async def analyze_gaps(
             "gap_summary": f"Coverage {avg_coverage:.0%} — sufficient.",
         }
 
-    # Find low-coverage columns
     low_cols = [col for col, cov in coverage.items() if cov < 0.5]
 
-    # Build per-entity missing column map for the top incomplete entities
     entity_gaps = []
     for e in entities:
         if "name" not in e.cells:
@@ -104,7 +95,6 @@ async def analyze_gaps(
         if missing:
             entity_gaps.append({"name": name, "missing": missing})
 
-    # Sort by most missing columns, take top 8
     entity_gaps.sort(key=lambda x: -len(x["missing"]))
     entity_gaps = entity_gaps[:8]
 
@@ -123,12 +113,12 @@ Generate per-entity queries to fill the missing attributes."""
 
     try:
         response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=512,
+            model="qwen-3-235b-a22b-instruct-2507",
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": prompt},
             ],
+            max_tokens=512,
         )
         text = response.choices[0].message.content.strip()
         match = re.search(r"\{[\s\S]*\}", text)
@@ -139,7 +129,6 @@ Generate per-entity queries to fill the missing attributes."""
     except Exception as exc:
         logger.warning("Gap analyzer LLM call failed: %s", exc)
 
-    # Fallback: generate per-entity queries from low-coverage columns
     fallback_queries = []
     for eg in entity_gaps[:3]:
         fallback_queries.append(f"{eg['name']} {' '.join(eg['missing'][:2])}")
