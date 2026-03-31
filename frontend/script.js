@@ -1,3 +1,20 @@
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+  const thumb = document.getElementById('tt');
+  if (thumb) thumb.textContent = theme === 'dark' ? '🌙' : '☀️';
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// Apply saved theme immediately (before paint) — default dark like portfolio
+applyTheme(localStorage.getItem('theme') || 'dark');
+
 // ── Config ──────────────────────────────────────────────────────────────────
 
 function getApiBase() {
@@ -14,10 +31,9 @@ function saveApiUrl(notify = false) {
 
 function toggleSettings() {
   const p = document.getElementById('settingsPanel');
-  p.classList.toggle('hidden');
-  if (!p.classList.contains('hidden')) {
-    document.getElementById('apiUrlInput').value = getApiBase();
-  }
+  const isOpen = p.style.display !== 'none' && p.style.display !== '';
+  p.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) document.getElementById('apiUrlInput').value = getApiBase();
 }
 
 // ── Pipeline stages ──────────────────────────────────────────────────────────
@@ -109,7 +125,7 @@ async function startSearch() {
   document.getElementById('progressDetail').textContent = '';
   document.getElementById('searchBtn').disabled = true;
   document.getElementById('searchBtn').innerHTML = `
-    <div class="w-4 h-4 border-2 border-white border-t-blue-200 rounded-full animate-spin"></div>
+    <div class="spinner" style="width:14px;height:14px;border-color:rgba(255,255,255,0.3);border-top-color:white;"></div>
     Searching…
   `;
   lastResult = null;
@@ -330,7 +346,7 @@ async function loadExamples() {
     data.examples.forEach(ex => {
       const btn = document.createElement('button');
       btn.textContent = ex;
-      btn.className = 'text-xs bg-slate-100 hover:bg-blue-100 hover:text-blue-700 text-slate-600 px-3 py-1 rounded-full transition';
+      btn.className = 'ex-pill';
       btn.onclick = () => {
         document.getElementById('queryInput').value = ex;
         startSearch();
@@ -344,8 +360,8 @@ async function loadExamples() {
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 
-function show(id) { document.getElementById(id).classList.remove('hidden'); }
-function hide(id) { document.getElementById(id).classList.add('hidden'); }
+function show(id) { document.getElementById(id).style.display = ''; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
 
 function showError(msg) {
   document.getElementById('errorMessage').textContent = msg;
@@ -356,7 +372,7 @@ function resetSearchBtn() {
   const btn = document.getElementById('searchBtn');
   btn.disabled = false;
   btn.innerHTML = `
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg style="width:14px;height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
         d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
     </svg>
@@ -367,6 +383,48 @@ function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// ── Inline cell expand ────────────────────────────────────────────────────────
+
+function expandCell(triggerEl, colName, fullText) {
+  const row = triggerEl.closest('tr');
+  const colCount = row.closest('table').querySelectorAll('thead th').length || row.cells.length;
+
+  // Toggle: if already open, collapse
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('expanded-detail-row')) {
+    next.classList.remove('open');
+    next.addEventListener('transitionend', () => next.remove(), { once: true });
+    return;
+  }
+
+  const expandedRow = document.createElement('tr');
+  expandedRow.className = 'expanded-detail-row';
+  expandedRow.innerHTML = `
+    <td colspan="${colCount}">
+      <div class="expanded-detail-inner">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+          <div style="flex:1;">
+            <div class="expanded-col-label">${escapeHtml(colName.replace(/_/g, ' '))}</div>
+            <div class="expanded-detail-text">${escapeHtml(fullText)}</div>
+          </div>
+          <button class="expanded-close-btn" title="Collapse">
+            <svg style="width:15px;height:15px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </td>`;
+
+  expandedRow.querySelector('.expanded-close-btn').addEventListener('click', () => {
+    expandedRow.classList.remove('open');
+    expandedRow.addEventListener('transitionend', () => expandedRow.remove(), { once: true });
+  });
+
+  row.after(expandedRow);
+  requestAnimationFrame(() => expandedRow.classList.add('open'));
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
