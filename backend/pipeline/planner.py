@@ -12,11 +12,11 @@ SYSTEM_PROMPT = """You are an expert at planning structured web research.
 
 Given a topic query you must:
 1. Identify the entity type (e.g. "AI healthcare startups", "pizza restaurants")
-2. Choose 5 - 8 columns that best describe these entities.
+2. Choose EXACTLY 5 columns that best describe these entities (no more, no fewer).
    Rules:
    - "name" must always be the FIRST column
    - Include a short "description" column second
-   - Add domain-specific attributes (for companies: founded_year, headquarters, funding_stage; for restaurants: cuisine, price_range, rating, address)
+   - Add 3 domain-specific attributes (for companies pick 3 from: founded_year, headquarters, funding_stage, website; for restaurants pick 3 from: cuisine, price_range, rating, address)
 3. Generate 4 - 6 DIVERSE search queries covering different angles
 
 Respond with ONLY a JSON object - no markdown, no extra text:
