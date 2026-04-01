@@ -103,6 +103,7 @@ function advanceToStage(stageId) {
 // ── State ────────────────────────────────────────────────────────────────────
 
 let lastResult = null;
+let currentAbortController = null;
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
@@ -123,20 +124,17 @@ async function startSearch() {
   document.getElementById('progressFill').style.width = '0%';
   document.getElementById('progressMessage').textContent = 'Starting…';
   document.getElementById('progressDetail').textContent = '';
-  document.getElementById('searchBtn').disabled = true;
-  document.getElementById('searchBtn').innerHTML = `
-    <div class="spinner" style="width:14px;height:14px;border-color:rgba(255,255,255,0.3);border-top-color:white;"></div>
-    Searching…
-  `;
+  setStopBtn();
   lastResult = null;
 
+  currentAbortController = new AbortController();
   const url = `${getApiBase()}/api/search`;
-  let es;
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, max_rounds: maxRounds }),
+      signal: currentAbortController.signal,
     });
 
     if (!resp.ok) {
@@ -162,9 +160,20 @@ async function startSearch() {
       }
     }
   } catch (err) {
-    showError(err.message);
-  } finally {
+    if (err.name === 'AbortError') {
+      hide('progressSection');
+    } else {
+      showError(err.message);
+    }
     resetSearchBtn();
+  } finally {
+    currentAbortController = null;
+  }
+}
+
+function stopSearch() {
+  if (currentAbortController) {
+    currentAbortController.abort();
   }
 }
 
@@ -184,9 +193,11 @@ function handleSSE(msg) {
     hide('progressSection');
     renderResults(msg.data);
     show('resultsSection');
+    resetSearchBtn();
   } else if (msg.type === 'error') {
     hide('progressSection');
     showError(msg.message);
+    resetSearchBtn();
   }
 }
 
@@ -368,9 +379,21 @@ function showError(msg) {
   show('errorBanner');
 }
 
+function setStopBtn() {
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = false;
+  btn.onclick = stopSearch;
+  btn.innerHTML = `
+    <svg style="width:13px;height:13px;" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="5" y="5" width="14" height="14" rx="2"/>
+    </svg>
+    Stop`;
+}
+
 function resetSearchBtn() {
   const btn = document.getElementById('searchBtn');
   btn.disabled = false;
+  btn.onclick = startSearch;
   btn.innerHTML = `
     <svg style="width:14px;height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
