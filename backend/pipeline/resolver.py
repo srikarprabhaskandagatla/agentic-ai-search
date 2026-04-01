@@ -16,7 +16,7 @@ from ..models import Entity, CellValue, SourceRef
 
 logger = logging.getLogger(__name__)
 
-_MAX_ENTITIES_OUT = 20
+_MAX_ENTITIES_OUT = 10
 
 
 def _normalise_name(name: str) -> str:
