@@ -220,7 +220,7 @@ nav {
 /* ── Main layout ──────────────────────────────────────────────────────────── */
 main {
   max-width: 1000px; margin: 0 auto;
-  padding: 88px 40px 60px;
+  padding: 88px 40px 100px;
   position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: center;
 }
@@ -509,9 +509,28 @@ select {
   padding: 16px 20px; display: flex; gap: 12px; align-items: flex-start;
 }
 
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+footer.footer {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+  background: var(--nav-bg); backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+  padding: 12px 40px; height: 60px;
+  display: flex; align-items: center; justify-content: space-between;
+  transition: background 0.4s, border-color 0.4s;
+}
+
+.footer-left, .footer-right {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  letter-spacing: 0.5px; color: var(--text2); font-weight: 400;
+}
+
+.footer-left { text-align: left; }
+.footer-right { text-align: right; }
+
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  main { padding: 72px 20px 40px; }
+  main { padding: 72px 20px 100px; }
   nav  { padding: 0 20px; }
   #settingsPanel { padding: 10px 20px; }
+  footer.footer { padding: 10px 20px; }
 }
