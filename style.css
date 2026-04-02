@@ -426,7 +426,7 @@ select {
 .conf-low  { background: #ef4444; }
 
 /* ── Results table ────────────────────────────────────────────────────────── */
-.table-scroll { overflow-x: auto; border: 2px solid var(--highlight); border-radius: 12px; box-shadow: 0 0 0 1px var(--border); }
+.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
 
 .result-table { width: 100%; border-collapse: collapse; background: var(--card); backdrop-filter: blur(12px); }
 
@@ -499,7 +499,7 @@ select {
 }
 
 /* ── Inline expanded detail row ───────────────────────────────────────────── */
-.expanded-detail-row > td { padding: 0 !important; border-bottom: none !important; background: transparent !important; }
+.expanded-detail-row > td { padding: 0 !important; border-bottom: none !important; background: transparent !important; overflow: visible !important; white-space: normal !important; max-width: none !important; }
 .expanded-detail-inner {
   max-height: 0; overflow: hidden; padding: 0 16px;
   background: var(--bg2); border-left: 2px solid var(--highlight);
@@ -523,6 +523,17 @@ select {
   background: none; border: none; cursor: pointer; transition: color 0.15s;
 }
 .expanded-close-btn:hover { color: var(--text); }
+
+/* ── Confidence legend ────────────────────────────────────────────────────── */
+.conf-legend {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 10px;
+  font-family: 'Roboto', sans-serif; font-size: 11px; color: var(--text3);
+}
+.conf-legend-label {
+  font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-right: 4px;
+}
+.conf-legend-item { display: flex; align-items: center; gap: 5px; }
 
 /* ── Fade in ──────────────────────────────────────────────────────────────── */
 .fade-in { animation: fadeIn 0.4s ease; }

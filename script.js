@@ -1,4 +1,4 @@
-//  Theme 
+// ── Theme ─────────────────────────────────────────────────────────────────────
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -15,10 +15,10 @@ function toggleTheme() {
 // Apply saved theme immediately (before paint) — default dark like portfolio
 applyTheme(localStorage.getItem('theme') || 'dark');
 
-//  Config 
+// ── Config ──────────────────────────────────────────────────────────────────
 
 function getApiBase() {
-  return localStorage.getItem('apiBase') || 'https://agentic-ai-search.up.railway.app';
+  return localStorage.getItem('apiBase') || 'http://localhost:8000';
 }
 
 function saveApiUrl(notify = false) {
@@ -36,7 +36,7 @@ function toggleSettings() {
   if (!isOpen) document.getElementById('apiUrlInput').value = getApiBase();
 }
 
-//  Pipeline stages 
+// ── Pipeline stages ──────────────────────────────────────────────────────────
 
 const STAGES = [
   { id: 'planning',   label: 'Plan',    icon: '🧠' },
@@ -45,6 +45,7 @@ const STAGES = [
   { id: 'extracting', label: 'Extract', icon: '⚗️'  },
   { id: 'resolving',  label: 'Resolve', icon: '🔗' },
   { id: 'analyzing',  label: 'Analyse', icon: '📊' },
+  { id: 'filling',    label: 'LLM Fill', icon: '🤖' },
 ];
 
 function buildPipelineSteps() {
@@ -100,12 +101,12 @@ function advanceToStage(stageId) {
   currentStageIdx = idx;
 }
 
-//  State 
+// ── State ────────────────────────────────────────────────────────────────────
 
 let lastResult = null;
 let currentAbortController = null;
 
-//  Search ─
+// ── Search ───────────────────────────────────────────────────────────────────
 
 function handleKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); startSearch(); }
@@ -207,7 +208,7 @@ function handleSSE(msg) {
   }
 }
 
-//  Results rendering 
+// ── Results rendering ────────────────────────────────────────────────────────
 
 function renderResults(data) {
   const { query, entity_type, columns, entities, sources_consulted,
@@ -222,7 +223,7 @@ function renderResults(data) {
   );
   document.getElementById('sourcesText').textContent =
     `Every highlighted value traces to a source. Click the blue badges (①②③) to see the exact excerpt.` +
-    (hasLLMFilled ? '  ★ Starred values are LLM estimates and may be inaccurate.' : '');
+    (hasLLMFilled ? '  * Starred values are LLM estimates and may be inaccurate.' : '');
 
   // Build column list: skip 'name' from columns since it's rendered first anyway
   const allCols = columns;
@@ -269,10 +270,10 @@ function renderResults(data) {
             title="${escapeHtml(src.title || src.url)}">${srcIdx + 1}</span>`;
         }).join('');
 
-        const starPrefix = isLLMFilled ? `<span class="llm-star" title="LLM estimate — may be inaccurate">★</span> ` : '';
+        const starPrefix = isLLMFilled ? `<span class="llm-star" title="LLM estimate — may be inaccurate">*</span> ` : '';
         const TRUNCATE = 72;
-        const isLong = col !== 'name' && val.length > TRUNCATE;
-        const displayVal = isLong ? escapeHtml(val.slice(0, TRUNCATE)) + '…' : escapeHtml(val);
+        const isLong = col !== 'name' && (col === 'description' || val.length > TRUNCATE);
+        const displayVal = isLong && val.length > TRUNCATE ? escapeHtml(val.slice(0, TRUNCATE)) + '…' : escapeHtml(val);
 
         td.className = col === 'name' ? 'name-cell' : '';
 
@@ -308,10 +309,23 @@ function renderResults(data) {
     tbody.appendChild(tr);
   });
 
+  // Confidence legend (rendered once after the table)
+  const existingLegend = document.getElementById('confLegend');
+  if (existingLegend) existingLegend.remove();
+  const legend = document.createElement('div');
+  legend.id = 'confLegend';
+  legend.className = 'conf-legend';
+  legend.innerHTML = `
+    <span class="conf-legend-label">Confidence:</span>
+    <span class="conf-legend-item"><span class="conf-dot conf-high"></span> ≥ 85% — High</span>
+    <span class="conf-legend-item"><span class="conf-dot conf-mid"></span> 65–84% — Medium</span>
+    <span class="conf-legend-item"><span class="conf-dot conf-low"></span> &lt; 65% — Low</span>`;
+  document.getElementById('sourcesFooter').after(legend);
+
   document.getElementById('resultsSection').classList.add('fade-in');
 }
 
-//  Source modal 
+// ── Source modal ──────────────────────────────────────────────────────────────
 
 function showSource(url, title, snippet) {
   const modal = document.getElementById('sourceModal');
@@ -350,7 +364,7 @@ function showSource(url, title, snippet) {
 function closeSourceModal() { document.getElementById('sourceModal').classList.remove('open'); }
 function closeModal(e) { if (e.target === document.getElementById('sourceModal')) closeSourceModal(); }
 
-//  Export ─
+// ── Export ───────────────────────────────────────────────────────────────────
 
 function exportJSON() {
   if (!lastResult) return;
@@ -380,7 +394,7 @@ function download(content, filename, mime) {
   a.click();
 }
 
-//  Examples ─
+// ── Examples ─────────────────────────────────────────────────────────────────
 
 async function loadExamples() {
   try {
@@ -402,7 +416,7 @@ async function loadExamples() {
   }
 }
 
-//  Utils ─
+// ── Utils ─────────────────────────────────────────────────────────────────────
 
 function show(id) { document.getElementById(id).style.display = ''; }
 function hide(id) { document.getElementById(id).style.display = 'none'; }
@@ -441,7 +455,7 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
-//  Inline cell expand 
+// ── Inline cell expand ────────────────────────────────────────────────────────
 
 function showSourceFromEl(el) {
   showSource(el.dataset.url, el.dataset.title, el.dataset.snippet);
@@ -486,9 +500,10 @@ function expandCell(triggerEl) {
   });
 
   row.after(expandedRow);
-  requestAnimationFrame(() => expandedRow.classList.add('open'));
+  expandedRow.getBoundingClientRect(); // force reflow so CSS transition fires
+  expandedRow.classList.add('open');
 }
 
-//  Init 
+// ── Init ──────────────────────────────────────────────────────────────────────
 loadExamples();
 document.getElementById('apiUrlInput') && (document.getElementById('apiUrlInput').value = getApiBase());
