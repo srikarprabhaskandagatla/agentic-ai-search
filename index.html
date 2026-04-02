@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic AI Search</title>
+  <!-- Favicon — drop favicon.png into frontend/ to activate -->
+  <link rel="icon" type="image/png" href="favicon/favicon.png" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Roboto:ital,wght@0,300;0,400;0,500;0,700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js"></script>
+</head>
+<body>
+
+  <!-- ── Cosmic background (dark = stars/nebula, light = green texture) ── -->
+  <div id="cosmos">
+    <div class="s1"></div>
+    <div class="s2"></div>
+    <div class="s3"></div>
+    <div class="sh"></div>
+    <div class="sh"></div>
+    <div class="sh"></div>
+    <div class="nebula"></div>
+    <div class="ltex"></div>
+  </div>
+
+  <!-- ── Navigation ── -->
+  <nav>
+    <div class="nav-logo">Agent<span>Search.</span></div>
+    <div class="nav-right">
+<button class="tog" onclick="toggleTheme()" aria-label="Toggle theme">
+        <div class="togthumb" id="tt">🌙</div>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ── Main ── -->
+  <main>
+
+    <!-- ── Hero / Search ── -->
+    <div style="margin-bottom:48px;">
+      <div class="eyebrow">UMass Amherst · CIIR Agentic Search</div>
+      <h1 class="hero-title">Discover Any Topic<span class="hero-subtitle" style="display:block;margin-top:12px;font-size:0.65em;letter-spacing:4px;">Structured, Sourced, and Searchable</span></h1>
+      <p class="hero-sub">
+        Enter any topic, the agent runs multi-round web searches, scrapes live pages, extracts structured entities with an LLM, and links data back to its source.
+      </p>
+
+      <!-- Search card -->
+      <div class="search-card" style="max-width:660px;margin:0 auto;">
+        <div style="display:flex;gap:16px;align-items:flex-start;">
+          <textarea id="queryInput" rows="2"
+            placeholder="e.g. AI startups in healthcare, top pizza places in Brooklyn, open source database tools…"
+            onkeydown="handleKey(event)"></textarea>
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch;flex-shrink:0;width:120px;">
+            <button id="searchBtn" onclick="startSearch()" class="btn-primary" style="width:100%;justify-content:center;">
+              <svg style="width:14px;height:14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+              Search
+            </button>
+            <select id="roundsSelect" style="width:100%;text-align:center;">
+              <option value="1">1 · fast</option>
+              <option value="2" selected>2 · agentic</option>
+              <option value="3">3 · thorough</option>
+            </select>
+          </div>
+        </div>
+        <!-- Example queries -->
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--highlight);align-items:center;" id="exampleContainer">
+          <span style="font-family:'DM Mono',monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--highlight);font-weight:600;">Try →</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Progress Section ── -->
+    <div id="progressSection" style="display:none;max-width:660px;margin-left:auto;margin-right:auto;margin-bottom:32px;">
+      <div class="app-card">
+        <!-- Stage steps -->
+        <div style="display:flex;align-items:center;margin-bottom:20px;" id="pipelineSteps"></div>
+        <!-- Progress bar -->
+        <div id="progressBar" style="margin-bottom:16px;"><div id="progressFill" style="width:0%"></div></div>
+        <!-- Message -->
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="spinner" id="progressSpinner"></div>
+          <div>
+            <div id="progressMessage" style="font-size:13px;font-weight:500;color:var(--text);"></div>
+            <div id="progressDetail" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3);margin-top:2px;letter-spacing:0.3px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Results Section ── -->
+    <div id="resultsSection" style="display:none;" class="fade-in">
+      <!-- Header bar -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+        <div>
+          <h2 id="resultsTitle" style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.5px;color:var(--text);"></h2>
+          <p id="resultsMeta" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3);margin-top:4px;letter-spacing:0.3px;"></p>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="exportJSON()" class="btn-secondary">
+            <svg style="width:11px;height:11px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            JSON
+          </button>
+          <button onclick="exportCSV()" class="btn-secondary">
+            <svg style="width:11px;height:11px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0119 9.414V19a2 2 0 01-2 2z"/>
+            </svg>
+            CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="table-scroll">
+        <table class="result-table">
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Sources footer -->
+      <div id="sourcesFooter" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <svg style="width:12px;height:12px;color:var(--text3);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+          <span id="sourcesText" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text3);letter-spacing:0.3px;"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px;font-family:'DM Mono',monospace;font-size:10px;color:var(--text3);letter-spacing:0.3px;">
+          <span style="font-weight:600;margin-right:2px;">Confidence:</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span class="conf-dot conf-high" style="flex-shrink:0;"></span> ≥ 85% - High</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span class="conf-dot conf-mid" style="flex-shrink:0;"></span> 65-84% - Medium</span>
+          <span style="display:flex;align-items:center;gap:5px;"><span class="conf-dot conf-low" style="flex-shrink:0;"></span> &lt; 65% - Low</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Error Banner ── -->
+    <div id="errorBanner" style="display:none;max-width:660px;margin-left:auto;margin-right:auto;margin-top:16px;">
+      <div class="error-card">
+        <svg style="width:16px;height:16px;color:#ef4444;flex-shrink:0;margin-top:2px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div>
+          <div style="font-family:'Syne',sans-serif;font-weight:600;color:#ef4444;font-size:13px;">Search failed</div>
+          <div id="errorMessage" style="font-size:12px;color:#f87171;margin-top:3px;font-family:'DM Mono',monospace;"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Source Modal ── -->
+  <div id="sourceModal" onclick="closeModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+        <div style="font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--highlight);">Source Attribution</div>
+        <button onclick="closeSourceModal()"
+          style="color:var(--text3);background:none;border:none;cursor:pointer;transition:color 0.15s;"
+          onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text3)'">
+          <svg style="width:18px;height:18px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <!-- ── Footer ── -->
+  <footer class="footer">
+  <div class="footer-left">
+    © 2026 · Srikar Prabhas Kandagatla ·
+    <a href="https://www.linkedin.com/in/srikar-prabhas-kandagatla/" target="_blank" rel="noopener noreferrer">LinkedIn</a> ·
+    <a href="https://github.com/srikarprabhaskandagatla" target="_blank" rel="noopener noreferrer">GitHub</a> ·
+    <a href="https://srikarprabhaskandagatla.github.io/" target="_blank" rel="noopener noreferrer">Portfolio</a>
+  </div>
+    <div class="footer-right">CIIR Challenge</div>
+  </footer>
+
+</body>
+</html>
