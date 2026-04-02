@@ -18,7 +18,7 @@ applyTheme(localStorage.getItem('theme') || 'dark');
 // ── Config ──────────────────────────────────────────────────────────────────
 
 function getApiBase() {
-  return localStorage.getItem('apiBase') || 'http://localhost:8000';
+  return localStorage.getItem('apiBase') || 'https://agentic-ai-search.up.railway.app';
 }
 
 function saveApiUrl(notify = false) {
