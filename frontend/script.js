@@ -114,7 +114,7 @@ function handleKey(e) {
 async function startSearch() {
   const query = document.getElementById('queryInput').value.trim();
   if (!query) return;
-  const maxRounds = parseInt(document.getElementById('roundsSelect').value);
+  const searchDepth = parseInt(document.getElementById('roundsSelect').value);
 
   // Reset UI
   hide('resultsSection');
@@ -129,11 +129,13 @@ async function startSearch() {
 
   currentAbortController = new AbortController();
   const url = `${getApiBase()}/api/search`;
+  let searchComplete = false;
+
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, max_rounds: maxRounds }),
+      body: JSON.stringify({ query, search_depth: searchDepth }),
       signal: currentAbortController.signal,
     });
 
@@ -149,15 +151,17 @@ async function startSearch() {
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      buf += decoder.decode(value || new Uint8Array(), { stream: !done });
       const lines = buf.split('\n');
       buf = lines.pop();
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          handleSSE(JSON.parse(line.slice(6)));
+          const msg = JSON.parse(line.slice(6));
+          if (msg.type === 'result' || msg.type === 'error') searchComplete = true;
+          handleSSE(msg);
         }
       }
+      if (done) break;
     }
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -165,9 +169,11 @@ async function startSearch() {
     } else {
       showError(err.message);
     }
+    searchComplete = true;
     resetSearchBtn();
   } finally {
     currentAbortController = null;
+    if (!searchComplete) resetSearchBtn(); // safety net: stream closed without result/error
   }
 }
 
