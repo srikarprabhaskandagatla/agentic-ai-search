@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 import asyncio
-import json
-import re
 import uuid
 import logging
 
 from cerebras.cloud.sdk import AsyncCerebras
 from ..models import Entity, CellValue, ScrapedPage, SourceRef
+from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +79,9 @@ async def _extract_from_page(
             return []
 
     text = response.choices[0].message.content.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
-        return []
-
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
+    data = extract_json_obj(text)
+    if data is None:
+        logger.warning("Extractor: could not parse JSON from response for %s", page.url)
         return []
 
     entities: list[Entity] = []

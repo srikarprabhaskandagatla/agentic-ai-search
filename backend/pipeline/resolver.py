@@ -13,6 +13,7 @@ import unicodedata
 
 from cerebras.cloud.sdk import AsyncCerebras
 from ..models import Entity, CellValue, SourceRef
+from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +96,10 @@ async def _llm_dedup(client: AsyncCerebras, name_index: list[dict]) -> list[list
         max_tokens=1024,
     )
     text = response.choices[0].message.content.strip()
-    match = re.search(r"\{[\s\S]*\}", text)
-    if not match:
+    data = extract_json_obj(text)
+    if data is None:
         return [[i] for i in range(len(name_index))]
-    try:
-        data = json.loads(match.group())
-        return data.get("merge_groups", [[i] for i in range(len(name_index))])
-    except json.JSONDecodeError:
-        return [[i] for i in range(len(name_index))]
+    return data.get("merge_groups", [[i] for i in range(len(name_index))])
 
 
 async def resolve_entities(client: AsyncCerebras, raw_entities: list[Entity]) -> list[Entity]:

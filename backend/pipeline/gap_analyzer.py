@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 import json
-import re
 import logging
 
 from cerebras.cloud.sdk import AsyncCerebras
 from ..models import Entity, CellValue
+from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,8 @@ Generate per-entity queries to fill the missing attributes."""
             max_tokens=512,
         )
         text = response.choices[0].message.content.strip()
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            result = json.loads(match.group())
+        result = extract_json_obj(text)
+        if result is not None:
             logger.info("Gap analysis: %s", result.get("gap_summary", ""))
             return result
     except Exception as exc:

@@ -2,10 +2,11 @@
 # Plans a structured search based on the initial query, defining entity type, columns, and search queries.
 
 from __future__ import annotations
-import json, re, logging
+import logging
 
 from cerebras.cloud.sdk import AsyncCerebras
 from ..models import SearchPlan
+from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,11 @@ async def plan_search(client: AsyncCerebras, query: str) -> SearchPlan:
     )
 
     text = response.choices[0].message.content.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
 
     try:
-        data = json.loads(text)
+        data = extract_json_obj(text)
+        if data is None:
+            raise ValueError("No JSON object found in planner response")
         plan = SearchPlan(**data)
         if "name" not in plan.columns:
             plan.columns.insert(0, "name")

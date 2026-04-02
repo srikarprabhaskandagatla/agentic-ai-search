@@ -12,6 +12,7 @@ import logging
 
 from cerebras.cloud.sdk import AsyncCerebras
 from ..models import Entity, CellValue
+from .utils import extract_json_arr
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +79,9 @@ async def llm_fill_gaps(
             temperature=0.1,
         )
         raw = resp.choices[0].message.content.strip()
-        # Strip markdown code fences if the model added them
-        if raw.startswith("```"):
-            parts = raw.split("```")
-            raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
-        filled_list: list[dict] = json.loads(raw)
+        filled_list = extract_json_arr(raw)
+        if filled_list is None:
+            raise ValueError("No JSON array found in LLM filler response")
     except Exception as exc:
         logger.warning("LLM filler failed: %s", exc)
         return entities
