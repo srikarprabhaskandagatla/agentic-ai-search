@@ -21,20 +21,16 @@ async def fetch_web_results(query: str, max_results: int = 8) -> list[SearchResu
         max_results=max_results,
         search_depth="basic",   # "advanced" uses 2x quota - not needed
         include_answer=False,
-        include_raw_content=True,  # full page text used as scrape fallback on cloud hosts
     )
 
     results = []
     for item in response.get("results", []):
         url = item.get("url", "").strip()
         if url:
-            # Prefer raw_content (full page text) over snippet for richer fallback
-            raw = (item.get("raw_content") or "").strip()
-            snippet = raw if raw else (item.get("content") or "").strip()
             results.append(SearchResult(
                 url=url,
                 title=item.get("title", ""),
-                snippet=snippet,
+                snippet=item.get("content", ""),
             ))
 
     logger.info("Tavily returned %d results for: %s", len(results), query)

@@ -109,15 +109,22 @@ async def search_endpoint(request: SearchRequest):
                 all_queries_used.extend(present_query)
 
                 new_results: list[SearchResult] = []
+                search_errors: list[Exception] = []
                 for results in results_per_query:
                     if isinstance(results, Exception):
                         logger.warning("Search task failed: %s", results)
+                        search_errors.append(results)
                         continue
                     for r in results:
                         if r.url not in seen_urls:
                             seen_urls.add(r.url)
                             new_results.append(r)
                             all_search_results.append(r)
+
+                # If every query failed with an exception, surface the real error
+                # instead of silently returning an empty table.
+                if not new_results and len(search_errors) == len(results_per_query):
+                    raise search_errors[0]
 
                 await send_progress("searching", f"{rl}: Found {len(new_results)} new URLs", rp(0.18))
                 if not new_results:
