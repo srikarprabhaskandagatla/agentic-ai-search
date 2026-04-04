@@ -1,5 +1,5 @@
 # These tests use mocked HTTP and API responses — no real API keys needed.
-# Run with: pytest backend/tests/ -v
+# Run with: pytest tests/ -v
 
 import asyncio, json, pytest
 from unittest.mock import AsyncMock, MagicMock, patch

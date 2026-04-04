@@ -50,5 +50,3 @@ render.yaml
 examples/
 pyproject.toml
 README.md
-
-tests/
