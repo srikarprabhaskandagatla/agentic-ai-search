@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv("backend/.env")
 
 # Logger Setup
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 cerebras_client: AsyncCerebras | None = None
@@ -121,8 +121,6 @@ async def search_endpoint(request: SearchRequest):
                             new_results.append(r)
                             all_search_results.append(r)
 
-                # If every query failed with an exception, surface the real error
-                # instead of silently returning an empty table.
                 if not new_results and len(search_errors) == len(results_per_query):
                     raise search_errors[0]
 
@@ -134,9 +132,7 @@ async def search_endpoint(request: SearchRequest):
                 await send_progress("scraping", f"{rl}: Fetching {len(new_results)} pages", rp(0.22))
                 pages = await scraper.scrape_urls([r.url for r in new_results])
 
-                # Fallback: use Tavily snippets for any URL that failed to scrape.
-                # This is critical on cloud hosts (Railway) where datacenter IPs are
-                # blocked by sites — at least the pre-extracted Tavily snippet is usable.
+                # Fallback: use Tavily snippets for any URL that failed to scrape
                 if len(pages) < len(new_results):
                     scraped_urls = {p.url for p in pages}
                     for r in new_results:
@@ -174,7 +170,7 @@ async def search_endpoint(request: SearchRequest):
                         await send_progress("analyzing", "Coverage sufficient - stopping early", rp(0.92))
                         break
 
-            # 7. LLM gap-fill — last-resort pass for still-missing values
+            # 7. LLM gap-fill - last-resort pass for still-missing values
             await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.97)
             all_entities = await llm_fill_gaps(
                 cerebras_client, all_entities, plan.columns, plan.entity_type
