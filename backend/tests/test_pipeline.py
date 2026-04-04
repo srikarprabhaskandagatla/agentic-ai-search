@@ -1,20 +1,12 @@
-"""
-Smoke tests for the pipeline stages.
+# These tests use mocked HTTP and API responses — no real API keys needed.
+# Run with: pytest backend/tests/ -v
 
-These tests use mocked HTTP and API responses — no real API keys needed.
-Run with: pytest backend/tests/ -v
-"""
-
-import asyncio
-import json
-import pytest
+import asyncio, json, pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# ── Planner ──────────────────────────────────────────────────────────────────
-
+# Planner
 @pytest.mark.asyncio
-async def test_planner_parse():
-    """Planner should parse valid JSON from Claude into a SearchPlan."""
+async def test_planner_parse(): # Planner should parse valid JSON from Claude into a SearchPlan
     from backend.pipeline.planner import plan_search
     from backend.models import SearchPlan
 
@@ -40,14 +32,13 @@ async def test_planner_parse():
 
 
 @pytest.mark.asyncio
-async def test_planner_name_always_first():
-    """Name column should always be first, even if model puts it elsewhere."""
+async def test_planner_name_always_first(): # Name column should always be first, even if model puts it elsewhere
     from backend.pipeline.planner import plan_search
 
     mock_choice = MagicMock()
     mock_choice.message.content = json.dumps({
         "entity_type": "pizza restaurants",
-        "columns": ["rating", "name", "address", "price_range"],  # name not first
+        "columns": ["rating", "name", "address", "price_range"],
         "search_queries": ["top pizza brooklyn"],
         "rationale": "Test",
     })
@@ -61,19 +52,16 @@ async def test_planner_name_always_first():
     assert plan.columns[0] == "name"
 
 
-# ── Scraper ──────────────────────────────────────────────────────────────────
-
+# Scraper 
 @pytest.mark.asyncio
-async def test_scraper_skips_binary():
-    """Scraper should skip URLs with binary file extensions."""
+async def test_scraper_skips_binary(): # Scraper should skip URLs with binary file extensions
     from backend.pipeline.scraper import scrape_urls
 
     pages = await scrape_urls(["https://example.com/file.pdf"])
     assert len(pages) == 0  # PDF should be skipped (no content)
 
 
-def test_scraper_clean_html():
-    """HTML cleaner should extract text and remove boilerplate."""
+def test_scraper_clean_html(): # HTML cleaner should extract text and remove boilerplate
     from backend.pipeline.scraper import _clean_html
 
     html = """
@@ -96,10 +84,8 @@ def test_scraper_clean_html():
     assert "founded in 2020" in content
 
 
-# ── Resolver ─────────────────────────────────────────────────────────────────
-
-def test_normalise_name():
-    """Name normalisation should collapse common variations."""
+# Resolver
+def test_normalise_name(): # Name normalisation should collapse common variations
     from backend.pipeline.resolver import _normalise_name
 
     assert _normalise_name("OpenAI Inc.") == _normalise_name("openai inc")
@@ -107,8 +93,7 @@ def test_normalise_name():
     assert _normalise_name("Google LLC") == _normalise_name("google")
 
 
-def test_fast_dedup_merges_same_names():
-    """Fast dedup should merge entities with the same normalised name."""
+def test_fast_dedup_merges_same_names(): # Fast dedup should merge entities with the same normalised name
     from backend.pipeline.resolver import _fast_dedup, _merge_entity_group
     from backend.models import Entity, CellValue, SourceRef
     import uuid
@@ -137,10 +122,8 @@ def test_fast_dedup_merges_same_names():
     assert "Anthropic" in names
 
 
-# ── Gap Analyser ──────────────────────────────────────────────────────────────
-
-def test_coverage_computation():
-    """Coverage should be 0 when no entities have a value for a column."""
+# Gap Analyser
+def test_coverage_computation(): # Coverage should be 0 when no entities have a value for a column
     from backend.pipeline.gap_analyzer import _compute_coverage
     from backend.models import Entity, CellValue, SourceRef
     import uuid
@@ -161,10 +144,8 @@ def test_coverage_computation():
     assert cov["founded_year"] == 0.5
 
 
-# ── Models ───────────────────────────────────────────────────────────────────
-
-def test_entity_coverage():
-    """Entity.coverage() should return fraction of filled columns."""
+# Models
+def test_entity_coverage(): # Entity.coverage() should return fraction of filled columns
     from backend.models import Entity, CellValue
     import uuid
 
@@ -179,8 +160,7 @@ def test_entity_coverage():
     assert e.coverage(columns) == 0.5  # 2 of 4 filled
 
 
-def test_cell_value_display():
-    """CellValue.display_value should handle None gracefully."""
+def test_cell_value_display(): # CellValue.display_value should handle None gracefully
     from backend.models import CellValue
 
     assert CellValue(value=None, sources=[]).display_value == ""
@@ -188,19 +168,16 @@ def test_cell_value_display():
     assert CellValue(value=42, sources=[]).display_value == "42"
 
 
-def test_cell_value_llm_filled_default():
-    """CellValue.llm_filled should default to False."""
+def test_cell_value_llm_filled_default():# CellValue.llm_filled should default to False
     from backend.models import CellValue
 
     c = CellValue(value="Series B", confidence=0.9, sources=[])
     assert c.llm_filled is False
 
 
-# ── LLM Filler (Stage 7) ──────────────────────────────────────────────────────
-
+# LLM Filler (Stage 7)
 @pytest.mark.asyncio
-async def test_llm_filler_fills_missing_cells():
-    """LLM filler should populate null cells and mark them llm_filled=True."""
+async def test_llm_filler_fills_missing_cells(): # LLM filler should populate null cells and mark them llm_filled=True
     from backend.pipeline.llm_filler import llm_fill_gaps
     from backend.models import Entity, CellValue
     import uuid
@@ -244,7 +221,6 @@ async def test_llm_filler_fills_missing_cells():
 
 @pytest.mark.asyncio
 async def test_llm_filler_skips_null_responses():
-    """LLM filler should not create cells when LLM returns null for a field."""
     from backend.pipeline.llm_filler import llm_fill_gaps
     from backend.models import Entity, CellValue
     import uuid
@@ -274,7 +250,6 @@ async def test_llm_filler_skips_null_responses():
 
 @pytest.mark.asyncio
 async def test_llm_filler_skips_entities_with_no_gaps():
-    """LLM filler should not call the API when all cells are already filled."""
     from backend.pipeline.llm_filler import llm_fill_gaps
     from backend.models import Entity, CellValue
     import uuid
@@ -291,14 +266,13 @@ async def test_llm_filler_skips_entities_with_no_gaps():
     columns = ["name", "founded_year"]
     result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
 
-    # API should never be called — nothing to fill
+    # API should never be called - nothing to fill
     mock_client.chat.completions.create.assert_not_called()
     assert result[0].cells["founded_year"].value == "2018"
 
 
 @pytest.mark.asyncio
 async def test_llm_filler_graceful_on_api_failure():
-    """LLM filler should return original entities unchanged when the API fails."""
     from backend.pipeline.llm_filler import llm_fill_gaps
     from backend.models import Entity, CellValue
     import uuid
@@ -320,7 +294,6 @@ async def test_llm_filler_graceful_on_api_failure():
 
 @pytest.mark.asyncio
 async def test_llm_filler_strips_markdown_fences():
-    """LLM filler should handle responses wrapped in ```json code fences."""
     from backend.pipeline.llm_filler import llm_fill_gaps
     from backend.models import Entity, CellValue
     import uuid
