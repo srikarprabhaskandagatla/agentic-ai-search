@@ -4,6 +4,10 @@ A multi-stage, agentic web research system. You type a natural language query li
 
 **Live Demo:** [https://srikarprabhaskandagatla.github.io/ciir-agentic-search/](https://srikarprabhaskandagatla.github.io/ciir-agentic-search/)
 
+The frontend is hosted on GitHub Pages. The backend is deployed on Railway (free tier)
+and is connected to the live frontend above. You can also run the backend locally
+by following the setup instructions and pointing the frontend to `http://localhost:8000`.
+
 ---
 
 ## Table of Contents
@@ -48,7 +52,6 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 # 4. Open the app
 # Open frontend/index.html in a browser, or serve it via any static server.
-# The frontend connects to http://localhost:8000 by default.
 ```
 
 **Run tests:**
