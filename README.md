@@ -58,22 +58,17 @@ pytest tests/test_pipeline.py -v
 
 ## Architecture Overview
 
-The pipeline has 7 sequential stages. Each stage feeds into the next. Stages 2–6 form a loop - after resolving entities and checking coverage, the gap analyzer decides whether to run another round of searching, scraping, and extraction.
+The pipeline has 7 sequential stages. Each stage feeds into the next. Stages 2-6 form a loop - after resolving entities and checking coverage, the gap analyzer decides whether to run another round of searching, scraping, and extraction.
 
-```mermaid
-flowchart TD
-    A[Query] --> B[Stage 1: Planner\nInfer schema + initial search queries]
-    B --> C[Stage 2: Searcher\nRun queries via Tavily API]
-    C --> D[Stage 3: Scraper\nFetch + clean web pages - concurrent]
-    D --> E[Stage 4: Extractor\nLLM extracts structured entities from pages]
-    E --> F[Stage 5: Resolver\nDeduplicate + merge entities]
-    F --> G{Stage 6: Gap Analyzer\nEnough coverage?}
-    G -- YES --> H[Stage 7: LLM Filler]
-    G -- NO --> I[Generate targeted queries]
-    I --> C
-    H --> J[Final EntityTable]
-```
+## Pipeline
 
+1. **Planner** - Infers schema and generates initial search queries
+2. **Searcher** - Runs queries via Tavily API
+3. **Scraper** - Fetches and cleans web pages (concurrent)
+4. **Extractor** - LLM extracts structured entities from pages
+5. **Resolver** - Deduplicates and merges entities
+6. **Gap Analyzer** - Checks coverage; if gaps remain, generates targeted queries and loops back to step 2
+7. **LLM Filler** - Fills any remaining missing fields → **Final EntityTable**
 ---
 
 ## Backend
@@ -104,7 +99,7 @@ All pipeline stages share a common set of Pydantic models.
 
 | Model | Purpose |
 |---|---|
-| `CellValue` | One cell in the table. Holds the value, source URLs, confidence (0–1), and whether it was LLM-filled. |
+| `CellValue` | One cell in the table. Holds the value, source URLs, confidence (0-1), and whether it was LLM-filled. |
 | `Entity` | One row in the table. A dict of column name → `CellValue`, plus a unique ID. Has a `coverage()` method. |
 | `SearchPlan` | Output of Stage 1. Contains entity type, column names, search queries, and reasoning. |
 | `SearchResult` | One result from Tavily: URL, title, snippet. |
@@ -463,25 +458,25 @@ The agentic loop improves completeness: if round 1 finds companies but misses th
 
 ### Latency
 
-A single-round search takes roughly 15–25 seconds end-to-end:
+A single-round search takes roughly 15-25 seconds end-to-end:
 - Planning: ~2s (one LLM call)
 - Searching: ~3s (3 Tavily queries)
-- Scraping: ~5–8s (concurrent, but some pages are slow)
-- Extraction: ~5–10s (one LLM call per page, up to 8 concurrent)
-- Resolving + gap analysis: ~2–3s
+- Scraping: ~5-8s (concurrent, but some pages are slow)
+- Extraction: ~5-10s (one LLM call per page, up to 8 concurrent)
+- Resolving + gap analysis: ~2-3s
 
-Each additional round adds approximately 10–15 seconds. The SSE progress stream makes the wait tolerable - users see activity rather than a blank screen.
+Each additional round adds approximately 10-15 seconds. The SSE progress stream makes the wait tolerable - users see activity rather than a blank screen.
 
 ### Cost
 
 The primary cost drivers are LLM calls (Cerebras) and search queries (Tavily). Per request:
 - 1 planning call
-- 1 extraction call per scraped page (~8–12 pages per round)
+- 1 extraction call per scraped page (~8-12 pages per round)
 - 1 resolver LLM call (if >5 entity groups)
 - 1 gap analyzer call per round
 - 1 filler call per entity with gaps
 
-With 2 rounds and a typical query, this is roughly 20–25 LLM calls. Cerebras pricing makes this inexpensive at scale. Tavily basic search is low-cost per query.
+With 2 rounds and a typical query, this is roughly 20-25 LLM calls. Cerebras pricing makes this inexpensive at scale. Tavily basic search is low-cost per query.
 
 ---
 
