@@ -407,7 +407,7 @@ Two export buttons appear once results are loaded:
 
 ## Tests
 
-All tests live in `tests/test_pipeline.py`. They use `unittest` and `unittest.mock` - no real API calls are made in tests.
+All tests live in `tests/test_pipeline.py`. They use `unittest` and `unittest.mock` - no real API calls are made in tests. The logs of the tests are given here: [Tests Log](https://github.com/srikarprabhaskandagatla/ciir-agentic-search/blob/main/tests/test_log.txt)
 
 ### What Is Tested
 
