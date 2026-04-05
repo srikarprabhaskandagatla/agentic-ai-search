@@ -2,6 +2,8 @@
 
 A multi-stage, agentic web research system. You type a natural language query like *"AI startups in healthcare"* and get back a clean, structured table with sourced data - every cell linked to the exact web page excerpt that proves it.
 
+**Live Demo:** [https://srikarprabhaskandagatla.github.io/ciir-agentic-search/](https://srikarprabhaskandagatla.github.io/ciir-agentic-search/)
+
 ---
 
 ## Table of Contents
@@ -30,7 +32,7 @@ The system takes a free-form query, figures out what kind of data to extract, se
 
 ```bash
 # 1. Clone and install dependencies
-git clone <repo-url>
+git clone https://github.com/srikarprabhaskandagatla/ciir-agentic-search.git
 cd ciir-agentic-search
 pip install -r requirements.txt
 
