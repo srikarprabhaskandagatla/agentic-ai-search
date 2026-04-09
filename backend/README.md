@@ -849,6 +849,38 @@ groups = {
 `return list(groups.values())` strips the string keys and returns just the groups.
 The normalized string key was only used for matching — it is discarded.
 
+```python
+[
+    [
+        Entity(id="a1b2-c3d4", cells={"name": CellValue("Tony's Pizza Napoletana"), "description": ..., "neighborhood": ..., "price_range": ...,               }),  # from Eater SF
+        Entity(id="m3n4-o5p6", cells={"name": CellValue("Tony's Pizza Napoletana"), "neighborhood": ..., "price_range": ...,  "signature_pizza": ...,           }),  # from Tony's site
+    ],
+    [
+        Entity(id="e5f6-g7h8", cells={"name": CellValue("Del Popolo"), "description": ..., "neighborhood": ..., "price_range": ...,                            }),  # from Eater SF
+        Entity(id="u1v2-w3x4", cells={"name": CellValue("Del Popolo"), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...,    }),  # from Del Popolo site
+    ],
+    [
+        Entity(id="i9j0-k1l2", cells={"name": CellValue("Gialina"), "description": ..., "neighborhood": ..., "price_range": ...,                               }),  # from Eater SF
+        Entity(id="y5z6-a7b8", cells={"name": CellValue("Gialina"), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...,       }),  # from Gialina site
+    ],
+    [
+        Entity(id="q7r8-s9t0", cells={"name": CellValue("Mission District Pizza Co."), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...}),
+    ],
+    [
+        Entity(id="c9d0-e1f2", cells={"name": CellValue("Flour + Water Pizzeria"), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...}),
+    ],
+    [
+        Entity(id="g3h4-i5j6", cells={"name": CellValue("Penny Roma"), "description": ..., "neighborhood": ..., "price_range": ...,                            }),
+    ],
+    [
+        Entity(id="k7l8-m9n0", cells={"name": CellValue("Shuggie's Trash Pie"), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...}),
+    ],
+    [
+        Entity(id="o1p2-q3r4", cells={"name": CellValue("Pizzeria Delfina"), "description": ..., "neighborhood": ..., "price_range": ..., "signature_pizza": ...}),
+    ],
+]
+```
+
 ### Merging each group via `_merge_entity_group()`
 
 For each group, `_merge_entity_group()` is called. Here is the Tony's group in detail:
