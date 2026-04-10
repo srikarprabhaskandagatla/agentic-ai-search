@@ -18,6 +18,7 @@ from backend.pipeline.planner import plan_search
 from backend.pipeline.searcher import fetch_web_results
 from backend.pipeline.extractor import extract_from_pages
 from backend.pipeline.llm_filler import llm_fill_gaps
+from backend.pipeline.ranker import extract_and_rank
 
 from dotenv import load_dotenv
 load_dotenv("backend/.env")
@@ -171,9 +172,16 @@ async def search_endpoint(request: SearchRequest):
                         break
 
             # 7. LLM gap-fill - last-resort pass for still-missing values
-            await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.97)
+            await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.95)
             all_entities = await llm_fill_gaps(
                 cerebras_client, all_entities, plan.columns, plan.entity_type
+            )
+
+            # 8. Constraint-based ranking — mandatory: constraint-satisfying
+            #    entities always surface to the top regardless of order.
+            await send_progress("ranking", "Ranking results by query constraints", 0.98)
+            all_entities = await extract_and_rank(
+                cerebras_client, all_entities, plan.columns, request.query
             )
 
             await send_progress("done",
