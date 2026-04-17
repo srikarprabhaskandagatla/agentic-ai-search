@@ -1,6 +1,6 @@
 <h1 align="center">
   <br>
-  Agentic Search
+  Agentic AI Search
   <br>
 </h1>
 
