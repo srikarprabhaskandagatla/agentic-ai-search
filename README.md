@@ -48,7 +48,7 @@
 </p>
 
 <p align="center">
-  <strong>Live Demo:</strong> <a href="https://srikarprabhaskandagatla.github.io/ciir-agentic-search/">https://srikarprabhaskandagatla.github.io/ciir-agentic-search/</a>
+  <strong>Live Demo:</strong> <a href="https://srikarprabhaskandagatla.github.io/agentic-ai-search/">https://srikarprabhaskandagatla.github.io/agentic-ai-search/</a>
   <br>
   <sub>Frontend on GitHub Pages · Backend on Railway</sub>
 </p>
