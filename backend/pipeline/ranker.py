@@ -124,10 +124,6 @@ def _op_passes(actual: float, op: str, threshold: float) -> bool:
 
 
 def _cols_for_hint(hint: str, columns: list[str], fallback_kw: set[str]) -> list[str]:
-    """
-    Return columns most likely to hold data described by `hint`.
-    Priority: exact word overlap → fallback keyword set → all columns.
-    """
     hint_words = set(re.split(r"[\s_\-]+", hint.lower()))
     # Remove very generic words
     hint_words -= {"the", "a", "an", "of", "in", "for", "and", "or"}
@@ -148,9 +144,9 @@ _CONSTRAINT_SYSTEM = """\
 You extract structured search constraints from a user query.
 Constraints are things the results MUST satisfy.
 
-Respond with ONLY a valid JSON object — no markdown, no explanation:
+Respond with ONLY a valid JSON object - no markdown, no explanation:
 {
-  "location": "<place the entity must be based in — city, region or country — or null>",
+  "location": "<place the entity must be based in - city, region or country - or null>",
   "numeric": [
     {
       "field_hint": "<what the number describes, e.g. funding, revenue, employees, year, rating, price>",
@@ -160,7 +156,7 @@ Respond with ONLY a valid JSON object — no markdown, no explanation:
   ],
   "categorical": [
     {
-      "field_hint": "<which aspect — e.g. type, cuisine, industry, domain, technology>",
+      "field_hint": "<which aspect - e.g. type, cuisine, industry, domain, technology>",
       "keywords": ["<primary keyword>", "<synonym 1>", "<synonym 2>"]
     }
   ]
@@ -234,7 +230,6 @@ Examples:
 
 
 async def _extract_constraints_llm(client: AsyncCerebras, query: str) -> dict:
-    """Call the LLM to parse the query into structured constraints."""
     try:
         resp = await client.chat.completions.create(
             model=MODEL,
@@ -255,14 +250,6 @@ async def _extract_constraints_llm(client: AsyncCerebras, query: str) -> dict:
 
 
 def _location_satisfied(entity: Entity, columns: list[str], loc_key: str) -> bool:
-    """
-    True if the entity is in the specified location.
-
-    Matching strategy (in order):
-      1. Canonical identifier match — handles country aliases and abbreviations
-      2. US state detection — full state names and comma-separated abbreviations
-      3. Phrase substring match — for any city or region not in the canon table
-    """
     loc_lower = loc_key.lower().strip()
     canon = _LOCATION_CANON.get(loc_lower)
     is_us_query = loc_lower in _LOCATION_CANON and "united states" in _LOCATION_CANON.get(loc_lower, set())
@@ -295,10 +282,6 @@ def _location_satisfied(entity: Entity, columns: list[str], loc_key: str) -> boo
 
 
 def _numeric_satisfied(entity: Entity, columns: list[str], nc: dict) -> bool:
-    """
-    True if any relevant column satisfies the numeric constraint.
-    Handles money strings ($10M), plain numbers, and year values.
-    """
     field_hint = nc.get("field_hint", "")
     op = nc.get("op", ">")
     threshold = float(nc.get("threshold", 0))
@@ -316,11 +299,6 @@ def _numeric_satisfied(entity: Entity, columns: list[str], nc: dict) -> bool:
 
 
 def _categorical_satisfied(entity: Entity, columns: list[str], cc: dict) -> bool:
-    """
-    True if at least one keyword from `cc["keywords"]` appears in any
-    text value of the relevant columns (case-insensitive substring match).
-    Falls back to searching ALL columns when no specific column is found.
-    """
     field_hint = cc.get("field_hint", "")
     keywords: list[str] = [kw.lower() for kw in cc.get("keywords", []) if kw]
 
@@ -410,7 +388,7 @@ def rank_entities(
     has_categorical = bool(constraints.get("categorical"))
 
     if not (has_location or has_numeric or has_categorical):
-        # No constraints — preserve order, return empty ranking info
+        # No constraints - preserve order, return empty ranking info
         scores = {e.id: 0 for e in entities}
         return entities, RankingInfo(total=0, labels=[], scores=scores)
 
