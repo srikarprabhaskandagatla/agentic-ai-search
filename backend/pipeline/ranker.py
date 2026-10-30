@@ -1,24 +1,6 @@
-# Stage 5.5 – Constraint-aware entity ranker
-#
-# Parses the user query into three generic constraint types, then re-orders
-# entities so those satisfying MORE constraints always appear first.
-#
-# Constraint types:
-#   location    – where the entity must be based (country, city, region)
-#   numeric     – any threshold on a number field (funding, year, rating …)
-#   categorical – required keywords / tags in any descriptive field
-#                 (open source, no-code, pizza, AI, healthcare …)
-#
-# Ranking key (all descending):
-#   1. n_satisfied   – entities satisfying ALL constraints → mandatory top
-#   2. coverage      – within the same tier, more-complete entities rank higher
-#
-# If no constraints are found the original order is preserved.
-
 from __future__ import annotations
 
-import re
-import logging
+import re, logging
 from typing import Any
 
 from cerebras.cloud.sdk import AsyncCerebras
@@ -29,9 +11,6 @@ from .utils import extract_json_obj
 logger = logging.getLogger(__name__)
 
 MODEL = "qwen-3-235b-a22b-instruct-2507"
-
-
-# ── Geography lookups ─────────────────────────────────────────────────────────
 
 _US_STATES_FULL = {
     "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
@@ -54,8 +33,6 @@ _US_STATES_ABBR = {
     "wi", "wy", "dc",
 }
 
-# Canonical token sets for country/region queries.
-# Keys are everything the LLM might return for that country.
 _LOCATION_CANON: dict[str, set[str]] = {
     "us":             {"us", "usa", "u.s.", "u.s.a.", "united states",
                        "united states of america", "america"},
@@ -85,27 +62,23 @@ _LOCATION_CANON: dict[str, set[str]] = {
     "sweden":         {"sweden", "swedish"},
 }
 
-# Column name fragments that indicate a geographic field
 _GEO_COLUMN_KW = {
     "country", "location", "headquarter", "hq", "based", "region",
     "city", "state", "office", "address", "origin", "geography",
 }
 
-# Column name fragments that likely hold a numeric financial / size value
 _NUMERIC_COLUMN_KW = {
     "funding", "raised", "investment", "capital", "revenue", "arr",
     "mrr", "valuation", "amount", "total", "employees", "headcount",
     "price", "cost", "rating", "score", "year", "founded",
 }
 
-# Column name fragments that hold descriptive / categorical text
 _TEXT_COLUMN_KW = {
     "description", "type", "category", "tag", "label", "domain",
     "industry", "sector", "model", "cuisine", "style", "focus",
     "specialt", "product", "service", "feature", "about",
 }
 
-# Unit multipliers
 _UNIT_MULT: dict[str, float] = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
 
 _NUMERIC_RE = re.compile(
@@ -113,8 +86,6 @@ _NUMERIC_RE = re.compile(
     r"(?P<unit>[KkMmBb](?:illion|llion)?)?\b",
 )
 
-
-# ── Numeric helpers ───────────────────────────────────────────────────────────
 
 def _parse_amount(val_str: str, unit_str: str) -> float:
     val = float(val_str.replace(",", ""))
@@ -124,7 +95,6 @@ def _parse_amount(val_str: str, unit_str: str) -> float:
 
 
 def _cell_to_number(value: Any) -> float | None:
-    """Extract the best numeric value from a cell (handles '$15M', '15 million', etc.)."""
     if value is None:
         return None
     s = str(value)
@@ -152,7 +122,6 @@ def _op_passes(actual: float, op: str, threshold: float) -> bool:
     return False
 
 
-# ── Column selection helpers ──────────────────────────────────────────────────
 
 def _cols_for_hint(hint: str, columns: list[str], fallback_kw: set[str]) -> list[str]:
     """
@@ -174,8 +143,6 @@ def _cols_for_hint(hint: str, columns: list[str], fallback_kw: set[str]) -> list
 
     return exact or fuzzy or columns
 
-
-# ── LLM constraint extraction ─────────────────────────────────────────────────
 
 _CONSTRAINT_SYSTEM = """\
 You extract structured search constraints from a user query.
@@ -287,8 +254,6 @@ async def _extract_constraints_llm(client: AsyncCerebras, query: str) -> dict:
     return {}
 
 
-# ── Per-constraint scorers ────────────────────────────────────────────────────
-
 def _location_satisfied(entity: Entity, columns: list[str], loc_key: str) -> bool:
     """
     True if the entity is in the specified location.
@@ -375,13 +340,8 @@ def _categorical_satisfied(entity: Entity, columns: list[str], cc: dict) -> bool
     return False
 
 
-# ── Entity scoring ────────────────────────────────────────────────────────────
 
 def _score_entity(entity: Entity, constraints: dict, columns: list[str]) -> int:
-    """
-    Count how many constraints this entity satisfies.
-    Each satisfied constraint contributes +1 to the sort key.
-    """
     n = 0
 
     location = constraints.get("location")
@@ -400,24 +360,21 @@ def _score_entity(entity: Entity, constraints: dict, columns: list[str]) -> int:
     return n
 
 
-# ── Constraint label builder ──────────────────────────────────────────────────
 
 def _fmt_threshold(val: float) -> str:
-    """Format a raw threshold number as a human-readable string ($10M, 4.5, 2020…)."""
     if val >= 1_000_000_000:
         return f"${val / 1_000_000_000:.4g}B"
     if val >= 1_000_000:
         return f"${val / 1_000_000:.4g}M"
     if val >= 1_000:
         return f"${val / 1_000:.4g}K"
-    # Plain number — no $ for small values (ratings, years, counts)
+    
     if val == int(val):
         return str(int(val))
     return f"{val:.4g}"
 
 
 def _build_labels(constraints: dict) -> list[str]:
-    """Return one human-readable string per constraint."""
     labels: list[str] = []
 
     location = constraints.get("location")
@@ -439,20 +396,12 @@ def _build_labels(constraints: dict) -> list[str]:
     return labels
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
 
 def rank_entities(
     entities: list[Entity],
     constraints: dict,
     columns: list[str],
 ) -> tuple[list[Entity], RankingInfo]:
-    """
-    Re-rank entities by constraint satisfaction (descending), then by
-    data coverage (descending) within the same tier.
-
-    Returns the re-ordered entity list AND a RankingInfo object that carries
-    per-entity scores and human-readable constraint labels for the UI.
-    """
     labels = _build_labels(constraints)
     total  = len(labels)
 
@@ -491,16 +440,6 @@ async def extract_and_rank(
     columns: list[str],
     query: str,
 ) -> tuple[list[Entity], RankingInfo]:
-    """
-    Main entry point called by the pipeline.
-
-    1. LLM parses the query into location / numeric / categorical constraints.
-    2. Each entity is scored (how many constraints it satisfies).
-    3. Entities are re-ordered: more constraints met → higher position, mandatory.
-
-    Returns (ranked_entities, RankingInfo) so the caller can attach metadata
-    to the final EntityTable for the frontend to display.
-    """
     if not entities:
         return entities, RankingInfo(total=0, labels=[], scores={})
 
