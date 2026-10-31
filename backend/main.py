@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
 from backend.models import EntityTable
-from backend.pipeline import resolver, gap_analyzer
+from backend.pipeline import embedder, resolver, gap_analyzer
 from backend.pipeline.planner import plan_search
 from backend.pipeline.retriever import retrieve, retrieve_with_backup
 from backend.pipeline.extractor import extract_from_pages
@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI):
     global llm_client
     llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, max_retries=LLM_MAX_RETRIES)
     logger.info("LLM client configured for %s", LLM_PROVIDER)
+    try:
+        await asyncio.to_thread(embedder.load_model)
+    except Exception as exc:
+        logger.warning("Embedding model failed to load: %s", exc)
     yield
 
 
@@ -85,6 +89,8 @@ async def search_endpoint(request: SearchRequest):
             seen_urls: set[str] = set()
             all_sources: list[str] = []
             all_pages = []
+            all_chunks = []
+            all_vectors = []
             all_queries_used: list[str] = []
 
             # 1. Plan
@@ -118,6 +124,8 @@ async def search_endpoint(request: SearchRequest):
                 if not pages:
                     break
 
+                embed_task = asyncio.create_task(asyncio.to_thread(embedder.embed_pages, pages))
+
                 # 4. Extract
                 await send_progress("extracting", f"{rl}: Extracting entities", rp(0.45))
                 new_raw = await extract_from_pages(llm_client, pages, plan.columns, plan.entity_type)
@@ -128,6 +136,13 @@ async def search_endpoint(request: SearchRequest):
                 await send_progress("resolving", f"{rl}: Deduplicating and merging", rp(0.70))
                 all_entities = resolver.resolve_entities(all_entities, all_pages, f"{request.query} {plan.entity_type}")
                 await send_progress("resolving", f"{rl}: {len(all_entities)} unique entities", rp(0.80))
+
+                try:
+                    chunks, vectors = await embed_task
+                    all_chunks.extend(chunks)
+                    all_vectors.append(vectors)
+                except Exception as exc:
+                    logger.warning("Embedding failed for this round: %s", exc)
 
                 # 6. Gap Analysis
                 if round_idx < request.search_depth - 1:
@@ -144,6 +159,9 @@ async def search_endpoint(request: SearchRequest):
                     else:
                         await send_progress("analyzing", "Coverage sufficient - stopping early", rp(0.92))
                         break
+
+            chunk_index = embedder.ChunkIndex(all_chunks, all_vectors) if all_chunks else None
+            logger.info("Chunk index ready with %d chunks", len(chunk_index) if chunk_index else 0)
 
             # 7. LLM gap-fill - last-resort pass for still-missing values
             await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.95)
