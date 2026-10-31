@@ -45,9 +45,9 @@
         <textarea id="query" rows="2" placeholder="Ask for a list, like AI startups in healthcare" aria-label="Topic to search"></textarea>
         <div class="ask-bar">
           <div class="seg" id="depth" role="radiogroup" aria-label="Search depth">
-            <button type="button" role="radio" data-depth="1" aria-checked="true" title="1 round">Fast</button>
-            <button type="button" role="radio" data-depth="2" aria-checked="false" title="2 rounds">Agentic</button>
-            <button type="button" role="radio" data-depth="3" aria-checked="false" title="3 rounds">Thorough</button>
+            <button type="button" role="radio" data-depth="1" aria-checked="true" title="One search, one fill pass">Fast</button>
+            <button type="button" role="radio" data-depth="2" aria-checked="false" title="Searches again for empty cells, up to 3 fill rounds">Agentic</button>
+            <!-- <button type="button" role="radio" data-depth="3" aria-checked="false" title="3 rounds">Thorough</button> -->
           </div>
           <button type="submit" class="go" id="search-btn" aria-label="Search" title="Search"></button>
         </div>
