@@ -1,75 +1,64 @@
-# Stage 4 - Extractor 
-
 from __future__ import annotations
-import asyncio, uuid, logging
+import uuid, logging
 from openai import AsyncOpenAI
-from ..config import LLM_REASONING, EXTRACTOR_MODEL
-from ..models import Entity, CellValue, ScrapedPage, SourceRef
-from .utils import extract_json_obj
+from ..config import LLM_REASONING, EXTRACTOR_MODEL, EXTRACT_INPUT_TOKENS, estimate_tokens, fit_text, pacer
+from ..models import Entity, CellValue, SourceRef
+from ..embedder import Chunk
+from ..utils import extract_json_obj, is_missing
 
 logger = logging.getLogger(__name__)
 
-PAGES_PER_CALL = 3
-PAGE_CHARS = 3_000
-MAX_CONCURRENT_CALLS = 2
+OUTPUT_TOKENS = 2500
+EXTRACT_CONFIDENCE = 0.9
 
 EXTRACTOR_SYSTEM_PROMPT = """You are a precise information extraction engine.
 
-You get several numbered web pages and a list of columns. Extract ALL entities of the target entity type from every page.
+You get numbered text chunks from web pages and a list of columns. Extract ALL entities of the target entity type from every chunk.
 
 STRICT RULES:
-1. Only extract values EXPLICITLY present in the content. Never infer or hallucinate.
-2. For every value, copy a short exact phrase (max 15 words) from that page into "snippet".
-3. Set confidence: 1.0 = stated directly, 0.8 = light interpretation, 0.6 = implied, 0.4 = uncertain.
-4. Leave out any field that is not found on the page.
-5. "name" must always be present - if you can't find a clear name, skip the entity.
-6. Set "page" to the number of the page the entity came from. If an entity is on two pages, list it once per page.
+1. Only extract values EXPLICITLY present in the chunk. Never infer or hallucinate.
+2. For every value, copy a short exact phrase (max 15 words) from that chunk into "snippet".
+3. Leave out any field that is not found. Never write placeholders like "unknown", "not specified" or "N/A".
+4. "name" must always be present - if you can't find a clear name, skip the entity.
+5. ALWAYS set "chunk" to the number of the chunk the entity came from. If an entity is in two chunks, list it once per chunk.
 
 Respond with ONLY a raw JSON object - no markdown, no preamble:
 {
   "entities": [
     {
-      "page": 1,
-      "name":     {"value": "...", "confidence": 0.99, "snippet": "exact phrase"},
-      "column_b": {"value": "...", "confidence": 0.85, "snippet": "exact phrase"}
+      "chunk": 1,
+      "name":     {"value": "...", "snippet": "exact phrase"},
+      "column_b": {"value": "...", "snippet": "exact phrase"}
     }
   ]
 }"""
 
-USER_TEMPLATE = """Extract all {entity_type} entities from these pages.
+USER_TEMPLATE = """Extract all {entity_type} entities from these chunks.
 Columns: {columns}
 
-{pages}
+{chunks}
 """
 
-PAGE_TEMPLATE = """[PAGE {number}]
-URL: {url}
-Title: {title}
-CONTENT:
-{content}
+CHUNK_TEMPLATE = """[CHUNK {number}] {title}
+{text}
 """
 
 
-def _batches(pages: list[ScrapedPage]) -> list[list[ScrapedPage]]:
-    usable = [page for page in pages if page.content and len(page.content) >= 80]
-    return [usable[i:i + PAGES_PER_CALL] for i in range(0, len(usable), PAGES_PER_CALL)]
-
-
-def _to_entity(raw: dict, page: ScrapedPage, columns: list[str]) -> Entity | None:
+def _to_entity(raw: dict, chunk: Chunk, columns: list[str]) -> Entity | None:
     cells: dict[str, CellValue] = {}
     for col in columns:
         field = raw.get(col, {})
         if not isinstance(field, dict):
             continue
         val = field.get("value")
-        if val is None:
+        if is_missing(val):
             continue
         cells[col] = CellValue(
             value=val,
-            confidence=float(field.get("confidence", 0.8)),
+            confidence=EXTRACT_CONFIDENCE,
             sources=[SourceRef(
-                url=page.url,
-                title=page.title,
+                url=chunk.url,
+                title=chunk.title,
                 snippet=str(field.get("snippet", ""))[:400],
             )],
         )
@@ -81,73 +70,82 @@ def _to_entity(raw: dict, page: ScrapedPage, columns: list[str]) -> Entity | Non
     return Entity(id=str(uuid.uuid4()), cells=cells)
 
 
-async def _extract_from_batch(
+def _chunk_for(raw: dict, chunks: list[Chunk]) -> Chunk | None:
+    try:
+        number = int(raw.get("chunk"))
+        if 1 <= number <= len(chunks):
+            return chunks[number - 1]
+    except (TypeError, ValueError):
+        pass
+    name = raw.get("name", {})
+    name = str(name.get("value", "") if isinstance(name, dict) else name).strip().lower()
+    if not name:
+        return None
+    return next((chunk for chunk in chunks if name in chunk.text.lower()), None)
+
+
+def _chunks_text(chunks: list[Chunk]) -> tuple[str, list[Chunk]]:
+    parts: list[str] = []
+    kept: list[Chunk] = []
+    used = 0
+    for chunk in chunks:
+        part = CHUNK_TEMPLATE.format(number=len(kept) + 1, title=chunk.title, text=chunk.text)
+        cost = estimate_tokens(part)
+        if used + cost > EXTRACT_INPUT_TOKENS:
+            if not kept:
+                parts.append(fit_text(part, EXTRACT_INPUT_TOKENS))
+                kept.append(chunk)
+            break
+        parts.append(part)
+        kept.append(chunk)
+        used += cost
+    return "\n".join(parts), kept
+
+
+async def extract_from_chunks(
     client: AsyncOpenAI,
-    batch: list[ScrapedPage],
+    chunks: list[Chunk],
     columns: list[str],
     entity_type: str,
-    semaphore: asyncio.Semaphore,
 ) -> list[Entity]:
-    pages_text = "\n".join(
-        PAGE_TEMPLATE.format(number=i, url=page.url, title=page.title, content=page.content[:PAGE_CHARS])
-        for i, page in enumerate(batch, start=1)
-    )
-    urls = [page.url for page in batch]
+    if not chunks:
+        return []
 
-    async with semaphore:
-        try:
-            response = await client.chat.completions.create(
-                model=EXTRACTOR_MODEL,
-                messages=[
-                    {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
-                    {"role": "user", "content": USER_TEMPLATE.format(
-                        entity_type=entity_type,
-                        columns=", ".join(columns),
-                        pages=pages_text,
-                    )},
-                ],
-                max_tokens=4096,
-                reasoning_effort=LLM_REASONING,
-                temperature=0.1,
-            )
-        except Exception as exc:
-            logger.error("Extraction failed for %s: %s", urls, exc)
-            return []
+    chunks_text, kept = _chunks_text(chunks)
+    user = USER_TEMPLATE.format(entity_type=entity_type, columns=", ".join(columns), chunks=chunks_text)
+    event = await pacer.reserve(estimate_tokens(EXTRACTOR_SYSTEM_PROMPT + user) + OUTPUT_TOKENS)
+    try:
+        response = await client.chat.completions.create(
+            model=EXTRACTOR_MODEL,
+            messages=[
+                {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=OUTPUT_TOKENS,
+            reasoning_effort=LLM_REASONING,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.error("Extraction failed: %s", exc)
+        return []
+    pacer.settle(event, getattr(response, "usage", None), "extract")
 
-    text = (response.choices[0].message.content or "").strip()
-    data = extract_json_obj(text)
+    data = extract_json_obj((response.choices[0].message.content or "").strip())
     if data is None:
-        logger.warning("Extractor: could not parse JSON from response for %s", urls)
+        logger.warning("Extractor: could not parse JSON")
         return []
 
     entities: list[Entity] = []
     for raw in data.get("entities", []):
         if not isinstance(raw, dict):
             continue
-        try:
-            number = int(raw.get("page", 0))
-        except (TypeError, ValueError):
+        chunk = _chunk_for(raw, kept)
+        if chunk is None:
             continue
-        if not 1 <= number <= len(batch):
-            continue
-        entity = _to_entity(raw, batch[number - 1], columns)
+        entity = _to_entity(raw, chunk, columns)
         if entity:
             entities.append(entity)
 
-    logger.info("Extracted %d entities from %d pages", len(entities), len(batch))
+    logger.info("Extracted %d entities from %d chunks", len(entities), len(kept))
     return entities
-
-
-async def extract_from_pages(
-    client: AsyncOpenAI,
-    pages: list[ScrapedPage],
-    columns: list[str],
-    entity_type: str,
-) -> list[Entity]:
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_CALLS)
-    tasks = [
-        _extract_from_batch(client, batch, columns, entity_type, semaphore)
-        for batch in _batches(pages)
-    ]
-    results = await asyncio.gather(*tasks)
-    return [e for batch_entities in results for e in batch_entities]
