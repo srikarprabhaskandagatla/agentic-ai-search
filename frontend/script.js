@@ -3,7 +3,6 @@ const STAGES = [
   ["searching", "Retrieve"],
   ["extracting", "Extract"],
   ["resolving", "Resolve"],
-  ["analyzing", "Gaps"],
   ["filling", "Fill"],
   ["ranking", "Rank"]
 ];
