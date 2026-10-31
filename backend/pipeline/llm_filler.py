@@ -3,17 +3,17 @@
 
 from __future__ import annotations
 import json, logging
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import FILLER_MODEL
 from ..models import Entity, CellValue
 from .utils import extract_json_arr
 
 logger = logging.getLogger(__name__)
 
-MODEL = "qwen-3-235b-a22b-instruct-2507"
 
 
 async def llm_fill_gaps(
-    client: AsyncCerebras,
+    client: AsyncOpenAI,
     entities: list[Entity],
     columns: list[str],
     entity_type: str,
@@ -59,7 +59,7 @@ async def llm_fill_gaps(
 
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=FILLER_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1500,
             temperature=0.1,
