@@ -197,6 +197,115 @@ async def test_retriever_raises_when_all_queries_fail():
             await retriever.retrieve(["q1", "q2"], seen_urls=set())
 
 
+@pytest.mark.asyncio
+async def test_retrieve_with_backup_skips_backup_when_enough_pages():
+    from backend.pipeline import retriever
+
+    pages = [retriever.ScrapedPage(url=f"https://{c}.com", content=LONG_TEXT) for c in "abcd"]
+    with patch.object(retriever, "retrieve", AsyncMock(return_value=pages)) as mock_retrieve:
+        got, used = await retriever.retrieve_with_backup(["q1", "q2", "q3"], set())
+
+    assert len(got) == 4
+    assert used == ["q1", "q2"]
+    mock_retrieve.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_with_backup_runs_backup_when_few_pages():
+    from backend.pipeline import retriever
+
+    first = [retriever.ScrapedPage(url="https://a.com", content=LONG_TEXT)]
+    second = [retriever.ScrapedPage(url="https://b.com", content=LONG_TEXT)]
+    with patch.object(retriever, "retrieve", AsyncMock(side_effect=[first, second])) as mock_retrieve:
+        got, used = await retriever.retrieve_with_backup(["q1", "q2", "q3"], set())
+
+    assert [p.url for p in got] == ["https://a.com", "https://b.com"]
+    assert used == ["q1", "q2", "q3"]
+    assert mock_retrieve.call_args_list[1].args[0] == ["q3"]
+    assert "https://a.com" in mock_retrieve.call_args_list[1].args[1]
+
+
+def _llm_reply(payload):
+    choice = MagicMock()
+    choice.message.content = json.dumps(payload)
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
+def _pages(n):
+    from backend.models import ScrapedPage
+    return [ScrapedPage(url=f"https://p{i}.com", title=f"P{i}", content=LONG_TEXT) for i in range(1, n + 1)]
+
+
+@pytest.mark.asyncio
+async def test_extractor_groups_pages_into_batches():
+    from backend.pipeline import extractor
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply({"entities": []}))
+    await extractor.extract_from_pages(mock_client, _pages(7), ["name"], "startups")
+
+    assert mock_client.chat.completions.create.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_extractor_links_entity_to_its_page():
+    from backend.pipeline import extractor
+
+    reply = {"entities": [
+        {"page": 1, "name": {"value": "Alpha", "confidence": 1.0, "snippet": "Alpha"}},
+        {"page": 2, "name": {"value": "Beta", "confidence": 1.0, "snippet": "Beta"}},
+    ]}
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply(reply))
+    entities = await extractor.extract_from_pages(mock_client, _pages(2), ["name"], "startups")
+
+    sources = {e.get_name(): e.cells["name"].sources[0].url for e in entities}
+    assert sources == {"Alpha": "https://p1.com", "Beta": "https://p2.com"}
+
+
+@pytest.mark.asyncio
+async def test_extractor_drops_bad_page_numbers():
+    from backend.pipeline import extractor
+
+    reply = {"entities": [
+        {"page": 5, "name": {"value": "Ghost"}},
+        {"page": "x", "name": {"value": "Typo"}},
+        {"name": {"value": "NoPage"}},
+        {"page": 1, "name": {"value": "Real"}},
+    ]}
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply(reply))
+    entities = await extractor.extract_from_pages(mock_client, _pages(2), ["name"], "startups")
+
+    assert [e.get_name() for e in entities] == ["Real"]
+
+
+@pytest.mark.asyncio
+async def test_extractor_keeps_other_batches_when_one_fails():
+    from backend.pipeline import extractor
+
+    reply = {"entities": [{"page": 1, "name": {"value": "Alpha"}}]}
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[RuntimeError("429"), _llm_reply(reply)])
+    entities = await extractor.extract_from_pages(mock_client, _pages(4), ["name"], "startups")
+
+    assert [e.get_name() for e in entities] == ["Alpha"]
+
+
+@pytest.mark.asyncio
+async def test_extractor_skips_short_pages():
+    from backend.pipeline import extractor
+    from backend.models import ScrapedPage
+
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply({"entities": []}))
+    await extractor.extract_from_pages(mock_client, [ScrapedPage(url="https://a.com", content="short")], ["name"], "startups")
+
+    mock_client.chat.completions.create.assert_not_called()
+
+
 # Resolver
 def test_normalise_name(): # Name normalisation should collapse common variations
     from backend.pipeline.resolver import _normalise_name
