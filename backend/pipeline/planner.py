@@ -3,13 +3,14 @@ import logging, re
 from datetime import date
 
 from openai import AsyncOpenAI
-from ..config import LLM_REASONING, PLANNER_MODEL
+from ..config import LLM_REASONING, PLANNER_MODEL, estimate_tokens, pacer
 from ..models import SearchPlan
-from .utils import extract_json_obj
+from ..utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
 MAX_COLUMNS = 8
+OUTPUT_TOKENS = 1024
 NUM_QUERIES = 3
 LOOKUP_COLUMNS = {
     "phone", "phone_number", "telephone", "address", "street_address", "email",
@@ -104,18 +105,21 @@ def _fallback_plan(query: str) -> SearchPlan:
 
 
 async def plan_search(client: AsyncOpenAI, query: str) -> SearchPlan:
+    user = f"Current year: {date.today().year}\nPlan a structured search for: {query}"
     try:
+        event = await pacer.reserve(estimate_tokens(SYSTEM_PLANNER_PROMPT + user) + OUTPUT_TOKENS)
         response = await client.chat.completions.create(
             model=PLANNER_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PLANNER_PROMPT},
-                {"role": "user", "content": f"Current year: {date.today().year}\nPlan a structured search for: {query}"},
+                {"role": "user", "content": user},
             ],
-            max_tokens=1024,
+            max_tokens=OUTPUT_TOKENS,
             reasoning_effort=LLM_REASONING,
             temperature=0.3,
             response_format={"type": "json_object"},
         )
+        pacer.settle(event, getattr(response, "usage", None), "plan")
         data = extract_json_obj((response.choices[0].message.content or "").strip())
         if data is None:
             raise ValueError("No JSON object found in planner response")
