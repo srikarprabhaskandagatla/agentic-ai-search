@@ -14,7 +14,7 @@ const FALLBACK_EXAMPLES = [
   "no-code app building tools",
   "large language model providers"
 ];
-const DEFAULT_API = "http://localhost:8000";
+const DEFAULT_API = location.port === "5500" || location.protocol === "file:" ? "http://localhost:8000" : location.origin;
 const TRUNCATE = 72;
 
 const $ = id => document.getElementById(id);
