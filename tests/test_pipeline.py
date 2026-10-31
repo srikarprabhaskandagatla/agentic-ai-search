@@ -1012,6 +1012,143 @@ def test_quote_check_accepts_number_with_unit():
     assert not _quote_ok("900", "raised $800M in total funding", chunk)
 
 
+@pytest.mark.asyncio
+async def test_planner_keeps_valid_rules_and_drops_bad_ones():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({
+        "entity_type": "pizza", "search_queries": ["q"],
+        "columns": ["name", "neighborhood", "price_range", "pizza_style"],
+        "rules": {
+            "location": {"column": "Neighborhood", "names": ["Brooklyn", "BK"]},
+            "numeric": [{"column": "price_range", "op": "<=", "value": "2"},
+                        {"column": "missing_col", "op": ">", "value": 1},
+                        {"column": "price_range", "op": "about", "value": 1}],
+            "categorical": [{"column": "pizza_style", "keywords": ["pizza", ""]},
+                            {"column": "pizza_style", "keywords": []}],
+        },
+    })
+    plan = await plan_search(client, "cheap pizza in Brooklyn")
+    assert plan.rules == {
+        "location": {"column": "neighborhood", "names": ["Brooklyn", "BK"]},
+        "numeric": [{"column": "price_range", "op": "<=", "value": 2.0}],
+        "categorical": [{"column": "pizza_style", "keywords": ["pizza"]}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_planner_rules_default_when_missing():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({"entity_type": "x", "columns": ["name", "a", "b"], "search_queries": ["q"]})
+    plan = await plan_search(client, "anything")
+    assert plan.rules == {"location": None, "numeric": [], "categorical": []}
+
+
+PIZZA_RULES = {
+    "location": {"column": "neighborhood", "names": ["Brooklyn", "BK"]},
+    "numeric": [{"column": "price_range", "op": "<=", "value": 2.0}],
+    "categorical": [{"column": "style", "keywords": ["pizza", "pizzeria"]}],
+}
+PIZZA_COLS = ["name", "neighborhood", "price_range", "style"]
+
+
+def test_rank_scores_rules_and_sorts():
+    from backend.pipeline.ranker import rank
+
+    rows = [
+        _entity("Joes Pizza", neighborhood="Manhattan", price_range="$", style="New York pizza"),
+        _entity("Lucali", neighborhood="Carroll Gardens, Brooklyn", price_range="$$", style="Thin crust pizza"),
+        _entity("Juliana", neighborhood="Brooklyn", price_range="$$$", style="Coal oven pizzeria"),
+    ]
+    top, _, info = rank(rows, PIZZA_RULES, PIZZA_COLS, "cheap pizza in Brooklyn")
+
+    assert [e.get_name() for e in top] == ["Lucali", "Joes Pizza", "Juliana"]
+    assert info.total == 3
+    assert info.scores[top[0].id] == 3
+    assert info.labels == ["In Brooklyn", "price range <= 2", "style: pizza"]
+
+
+def test_rank_uses_whole_words_only():
+    from backend.pipeline.ranker import rank
+
+    rules = {"location": {"column": "market", "names": ["US"]}, "numeric": [], "categorical": []}
+    rows = [_entity("Canva", market="Australia"), _entity("Stripe", market="US and Europe")]
+    top, _, info = rank(rows, rules, ["name", "market"], "q")
+    assert {e.get_name(): info.scores[e.id] for e in top} == {"Stripe": 1, "Canva": 0}
+
+
+def test_rank_numbers_with_units_and_dollar_signs():
+    from backend.pipeline.ranker import _to_number
+
+    assert _to_number("$$") == 2
+    assert _to_number("$800M") == 800_000_000
+    assert _to_number("Raised $1.5 billion") == 1_500_000_000
+    assert _to_number("Founded in 2019") == 2019
+    assert _to_number("Series B") is None
+
+
+def test_rank_empty_rule_cell_counts_as_not_met():
+    from backend.pipeline.ranker import rank
+
+    rows = [_entity("Ghost", style="pizza"), _entity("Lucali", neighborhood="Brooklyn", price_range="$$", style="pizza")]
+    top, _, info = rank(rows, PIZZA_RULES, PIZZA_COLS, "q")
+    assert info.scores[top[1].id] == 1
+    assert top[0].get_name() == "Lucali"
+
+
+def test_rank_tie_broken_by_sources_then_fullness():
+    from backend.pipeline.ranker import rank
+    from backend.models import SourceRef
+
+    one = _entity("One", "https://a.com", style="x")
+    two = _entity("Two", "https://a.com", style="x")
+    two.cells["style"].sources.append(SourceRef(url="https://b.com"))
+    full = _entity("Full", "https://a.com", style="x", extra="y")
+    top, _, _ = rank([one, full, two], {}, ["name", "style", "extra"], "q")
+    assert [e.get_name() for e in top] == ["Two", "Full", "One"]
+
+
+def test_rank_relevance_breaks_ties_by_meaning():
+    from backend.pipeline.ranker import rank
+
+    rows = [_entity("Pizza Place", style="brooklyn pizza"), _entity("Hippocratic AI", style="hippocratic founded 2023")]
+    top, _, _ = rank(rows, {}, ["name", "style"], "Hippocratic founded", model=_FakeEmbedder())
+    assert top[0].get_name() == "Hippocratic AI"
+
+
+def test_rank_keeps_top_ten():
+    from backend.pipeline.ranker import rank, TOP_N
+
+    top, _, info = rank([_entity(f"E{i}", style="x") for i in range(15)], {}, ["name", "style"], "q")
+    assert len(top) == TOP_N
+    assert len(info.scores) == TOP_N
+
+
+def test_pick_columns_keeps_full_and_rule_columns():
+    from backend.pipeline.ranker import pick_columns
+
+    rows = [_entity("A", style="x", funding="1", city="Boston", hq="a"),
+            _entity("B", style="y", hq="b"),
+            _entity("C", style="z", city="NYC", hq="c")]
+    cols = pick_columns(rows, ["name", "style", "funding", "city", "hq"], keep={"city"})
+    assert cols == ["name", "style", "city", "hq"]
+
+
+def test_pick_columns_falls_back_to_80_percent():
+    from backend.pipeline.ranker import pick_columns
+
+    rows = [_entity(f"E{i}", a="1", b="1" if i < 9 else "", c="1" if i < 8 else "", d="1" if i < 5 else "") for i in range(10)]
+    assert pick_columns(rows, ["name", "a", "b", "c", "d"], keep=set()) == ["name", "a", "b", "c"]
+
+
+def test_rank_without_rules_or_entities_is_safe():
+    from backend.pipeline.ranker import rank
+
+    top, cols, info = rank([], {}, ["name"], "q")
+    assert top == [] and cols == ["name"] and info.total == 0
+
+
 # Models
 def test_entity_coverage(): # Entity.coverage() should return fraction of filled columns
     from backend.models import Entity, CellValue
