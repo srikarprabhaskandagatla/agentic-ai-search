@@ -50,7 +50,7 @@ def _source_count(entity: Entity) -> int:
     return len({src.url for cell in entity.cells.values() for src in cell.sources})
 
 
-# IDF part of BM25 only, since names are too short for TF and length to matter.
+# IDF part of BM25 only, since names are too short for TF and length to matter
 class WordWeights:
     def __init__(self, pages: list[ScrapedPage], context: str):
         paragraphs = [
