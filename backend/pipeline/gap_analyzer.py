@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 import json, logging
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import GAP_MODEL
 from ..models import Entity, CellValue
 from .utils import extract_json_obj
 
@@ -53,7 +54,7 @@ def _compute_coverage(entities: list[Entity], columns: list[str]) -> dict[str, f
 
 
 async def analyze_gaps(
-    client: AsyncCerebras,
+    client: AsyncOpenAI,
     entities: list[Entity],
     columns: list[str],
     original_query: str,
@@ -106,7 +107,7 @@ Generate per-entity queries to fill the missing attributes."""
 
     try:
         response = await client.chat.completions.create(
-            model="qwen-3-235b-a22b-instruct-2507",
+            model=GAP_MODEL,
             messages=[
                 {"role": "system", "content": GAP_ANALYZER_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
