@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 import asyncio, uuid, logging
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import EXTRACTOR_MODEL
 from ..models import Entity, CellValue, ScrapedPage, SourceRef
 from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_EXTRACTIONS = 8  # Cerebras handles high concurrency well
+MAX_CONCURRENT_EXTRACTIONS = 8
 
 EXTRACTOR_SYSTEM_PROMPT = """You are a precise information extraction engine.
 
@@ -44,7 +45,7 @@ CONTENT:
 """
 
 async def _extract_from_page(
-    client: AsyncCerebras,
+    client: AsyncOpenAI,
     page: ScrapedPage,
     columns: list[str],
     entity_type: str,
@@ -56,7 +57,7 @@ async def _extract_from_page(
     async with semaphore:
         try:
             response = await client.chat.completions.create(
-                model="qwen-3-235b-a22b-instruct-2507",
+                model=EXTRACTOR_MODEL,
                 messages=[
                     {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
                     {"role": "user", "content": USER_TEMPLATE.format(
@@ -71,7 +72,7 @@ async def _extract_from_page(
                 temperature=0.1,
             )
         except Exception as exc:
-            logger.error("Cerebras extraction failed for %s: %s", page.url, exc)
+            logger.error("Extraction failed for %s: %s", page.url, exc)
             return []
 
     text = response.choices[0].message.content.strip()
@@ -106,12 +107,12 @@ async def _extract_from_page(
             continue
         entities.append(Entity(id=str(uuid.uuid4()), cells=cells))
 
-    logger.info("Cerebras extracted %d entities from %s", len(entities), page.url)
+    logger.info("Extracted %d entities from %s", len(entities), page.url)
     return entities
 
 
 async def extract_from_pages(
-    client: AsyncCerebras,
+    client: AsyncOpenAI,
     pages: list[ScrapedPage],
     columns: list[str],
     entity_type: str,
