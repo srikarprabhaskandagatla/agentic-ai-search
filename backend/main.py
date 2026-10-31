@@ -3,6 +3,7 @@
 # Import Libraries and Modules
 from __future__ import annotations
 import asyncio, json, logging, os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from openai import AsyncOpenAI
@@ -10,6 +11,7 @@ from openai import AsyncOpenAI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import EXTRACT_INPUT_TOKENS, LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
@@ -227,6 +229,9 @@ async def search_endpoint(request: SearchRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent.parent / "frontend", html=True), name="frontend")
 
 
 if __name__ == "__main__":
