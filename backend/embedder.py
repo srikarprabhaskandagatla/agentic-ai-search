@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import faiss
 import numpy as np
 
-from ..config import EMBED_MODEL
-from ..models import ScrapedPage
+from .config import EMBED_MODEL, estimate_tokens
+from .models import ScrapedPage
 
 logger = logging.getLogger(__name__)
 
@@ -64,16 +64,43 @@ def embed_pages(pages: list[ScrapedPage], model=None) -> tuple[list[Chunk], np.n
     return chunks, vectors
 
 
+def top_chunks(chunks: list[Chunk], vectors: np.ndarray | None, query: str, token_budget: int, model=None) -> list[Chunk]:
+    if vectors is not None and vectors.size and len(vectors) == len(chunks):
+        model = model or load_model()
+        scores = vectors @ _matrix(model.query_embed([query]))[0]
+        order = [int(i) for i in np.argsort(-scores)]
+    else:
+        order = list(range(len(chunks)))
+    picked: list[int] = []
+    used = 0
+    for i in order:
+        cost = estimate_tokens(chunks[i].text)
+        if used + cost <= token_budget:
+            picked.append(i)
+            used += cost
+    return [chunks[i] for i in sorted(picked)]
+
+
 class ChunkIndex:
     def __init__(self, chunks: list[Chunk], vectors: list[np.ndarray], model=None):
         self.model = model or load_model()
-        self.chunks = chunks
-        filled = [v for v in vectors if v.size]
+        self.chunks: list[Chunk] = []
         self.index = None
-        if filled:
-            matrix = np.vstack(filled)
+        for vector in vectors:
+            if vector.size:
+                self._add_matrix(vector)
+        self.chunks = list(chunks)
+
+    def _add_matrix(self, matrix: np.ndarray) -> None:
+        if self.index is None:
             self.index = faiss.IndexFlatIP(matrix.shape[1])
-            self.index.add(matrix)
+        self.index.add(matrix)
+
+    def add(self, chunks: list[Chunk], vectors: np.ndarray) -> None:
+        if not chunks or not vectors.size:
+            return
+        self._add_matrix(vectors)
+        self.chunks.extend(chunks)
 
     def __len__(self) -> int:
         return self.index.ntotal if self.index else 0
