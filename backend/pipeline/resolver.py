@@ -4,7 +4,7 @@
 from __future__ import annotations
 import json, re, unicodedata, logging
 from openai import AsyncOpenAI
-from ..config import RESOLVER_MODEL
+from ..config import LLM_REASONING, RESOLVER_MODEL
 from ..models import Entity, CellValue, SourceRef
 from .utils import extract_json_obj
 
@@ -89,6 +89,7 @@ async def _llm_dedup(client: AsyncOpenAI, name_index: list[dict]) -> list[list[i
             {"role": "user", "content": f"Deduplicate:\n{json.dumps(name_index, indent=2)}"},
         ],
         max_tokens=1024,
+        reasoning_effort=LLM_REASONING,
     )
     text = response.choices[0].message.content.strip()
     data = extract_json_obj(text)
