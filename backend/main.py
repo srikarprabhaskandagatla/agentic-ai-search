@@ -19,13 +19,12 @@ from backend.pipeline import filler, resolver
 from backend.pipeline.planner import plan_search
 from backend.pipeline.retriever import retrieve, retrieve_with_backup
 from backend.pipeline.extractor import extract_from_chunks
-from backend.pipeline.ranker import extract_and_rank
+from backend.pipeline.ranker import rank
 
 # Logger Setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MAX_ENTITIES = 10
 MAX_FILLS = 3
 MIN_ENTITIES = 8
 
@@ -179,13 +178,12 @@ async def search_endpoint(request: SearchRequest):
             all_sources.extend(fill.sources)
             completed_rounds = max(fill.rounds, 1)
 
-            # 8. Constraint-based ranking - mandatory: constraint-satisfying
-            #    entities always surface to the top regardless of order.
-            await send_progress("ranking", "Ranking results by query constraints", 0.98)
-            all_entities, ranking_info = await extract_and_rank(
-                llm_client, all_entities, plan.columns, request.query
+            # 6. Rank
+            await send_progress("ranking", "Ranking rows and picking full columns", 0.98)
+            model = chunk_index.model if chunk_index is not None else None
+            all_entities, shown_columns, ranking_info = await asyncio.to_thread(
+                rank, all_entities, plan.rules, plan.columns, request.query, model
             )
-            all_entities = all_entities[:MAX_ENTITIES]
 
             await send_progress("done",
                        f"Done! {len(all_entities)} entities - "
@@ -196,7 +194,7 @@ async def search_endpoint(request: SearchRequest):
             result = EntityTable(
                 query=request.query,
                 entity_type=plan.entity_type,
-                columns=plan.columns,
+                columns=shown_columns,
                 entities=all_entities,
                 sources_consulted=all_sources,
                 search_queries_used=all_queries_used,
