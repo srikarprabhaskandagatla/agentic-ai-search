@@ -12,10 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.models import SearchResult, EntityTable, ScrapedPage
-from backend.pipeline import scraper, resolver, gap_analyzer
+from backend.models import EntityTable
+from backend.pipeline import resolver, gap_analyzer
 from backend.pipeline.planner import plan_search
-from backend.pipeline.searcher import fetch_web_results
+from backend.pipeline.retriever import retrieve
 from backend.pipeline.extractor import extract_from_pages
 from backend.pipeline.llm_filler import llm_fill_gaps
 from backend.pipeline.ranker import extract_and_rank
@@ -83,7 +83,7 @@ async def search_endpoint(request: SearchRequest):
         try:
             all_entities = []
             seen_urls: set[str] = set()
-            all_search_results: list[SearchResult] = []
+            all_sources: list[str] = []
             all_queries_used: list[str] = []
 
             # 1. Plan
@@ -103,44 +103,13 @@ async def search_endpoint(request: SearchRequest):
                 rspan = 0.85 / request.search_depth
                 rp = lambda f, _rs=rs, _rspan=rspan: _rs + f * _rspan
 
-                # 2. Search
                 await send_progress("searching", f"{rl}: Searching with {len(present_query)} queries", rp(0.05))
-                search_tasks = [fetch_web_results(q, max_results=4) for q in present_query]
-                results_per_query = await asyncio.gather(*search_tasks, return_exceptions=True)
+                pages = await retrieve(present_query, seen_urls)
                 all_queries_used.extend(present_query)
+                seen_urls.update(page.url for page in pages)
+                all_sources.extend(page.url for page in pages)
 
-                new_results: list[SearchResult] = []
-                search_errors: list[Exception] = []
-                for results in results_per_query:
-                    if isinstance(results, Exception):
-                        logger.warning("Search task failed: %s", results)
-                        search_errors.append(results)
-                        continue
-                    for r in results:
-                        if r.url not in seen_urls:
-                            seen_urls.add(r.url)
-                            new_results.append(r)
-                            all_search_results.append(r)
-
-                if not new_results and len(search_errors) == len(results_per_query):
-                    raise search_errors[0]
-
-                await send_progress("searching", f"{rl}: Found {len(new_results)} new URLs", rp(0.18))
-                if not new_results:
-                    break
-
-                # 3. Scrape
-                await send_progress("scraping", f"{rl}: Fetching {len(new_results)} pages", rp(0.22))
-                pages = await scraper.scrape_urls([r.url for r in new_results])
-
-                # Fallback: use Tavily snippets for any URL that failed to scrape
-                if len(pages) < len(new_results):
-                    scraped_urls = {p.url for p in pages}
-                    for r in new_results:
-                        if r.url not in scraped_urls and len(r.snippet) >= 80:
-                            pages.append(ScrapedPage(url=r.url, title=r.title, content=r.snippet))
-
-                await send_progress("scraping", f"{rl}: Scraped {len(pages)} pages successfully", rp(0.40))
+                await send_progress("searching", f"{rl}: Read {len(pages)} new pages", rp(0.40))
                 if not pages:
                     break
 
@@ -186,7 +155,7 @@ async def search_endpoint(request: SearchRequest):
 
             await send_progress("done",
                        f"Done! {len(all_entities)} entities - "
-                       f"{len(all_search_results)} sources - "
+                       f"{len(all_sources)} sources - "
                        f"{completed_rounds} round(s)",
                        1.0)
 
@@ -195,7 +164,7 @@ async def search_endpoint(request: SearchRequest):
                 entity_type=plan.entity_type,
                 columns=plan.columns,
                 entities=all_entities,
-                sources_consulted=[r.url for r in all_search_results],
+                sources_consulted=all_sources,
                 search_queries_used=all_queries_used,
                 rounds_completed=completed_rounds,
                 ranking=ranking_info,
