@@ -456,6 +456,65 @@ def test_resolver_keeps_more_than_ten():
     assert len(out) == 12
 
 
+class _FakeEmbedder:
+    vocab = ["hippocratic", "founded", "2023", "palo", "alto", "pizza", "brooklyn", "funding"]
+
+    def _vec(self, text):
+        words = text.lower().split()
+        return [float(sum(w.startswith(v) for w in words)) + 0.01 for v in self.vocab]
+
+    def embed(self, texts):
+        return [self._vec(t) for t in texts]
+
+    def query_embed(self, texts):
+        return [self._vec(t) for t in texts]
+
+
+def test_chunk_pages_splits_long_page_with_overlap():
+    from backend.pipeline.embedder import chunk_pages, CHUNK_WORDS, OVERLAP_WORDS
+    from backend.models import ScrapedPage
+
+    words = [f"w{i}" for i in range(200)]
+    chunks = chunk_pages([ScrapedPage(url="https://a.com", content=" ".join(words))])
+
+    assert len(chunks) == 3
+    assert all(c.url == "https://a.com" for c in chunks)
+    assert chunks[1].text.split()[0] == f"w{CHUNK_WORDS - OVERLAP_WORDS}"
+    assert chunks[-1].text.split()[-1] == "w199"
+
+
+def test_chunk_pages_skips_tiny_pages():
+    from backend.pipeline.embedder import chunk_pages
+    from backend.models import ScrapedPage
+
+    assert chunk_pages([ScrapedPage(url="https://a.com", content="too short")]) == []
+
+
+def test_chunk_index_finds_the_right_page():
+    from backend.pipeline.embedder import embed_pages, ChunkIndex
+    from backend.models import ScrapedPage
+
+    fake = _FakeEmbedder()
+    pages = [
+        ScrapedPage(url="https://health.com", content="Hippocratic AI was founded in 2023 in Palo Alto and builds models for nurses and hospitals."),
+        ScrapedPage(url="https://food.com", content="The best pizza in Brooklyn is found at small family shops near the river every night."),
+    ]
+    chunks, vectors = embed_pages(pages, model=fake)
+    index = ChunkIndex(chunks, [vectors], model=fake)
+
+    hits = index.search(["Hippocratic founded", "Brooklyn pizza"], k=1)
+    assert hits[0][0][0].url == "https://health.com"
+    assert hits[1][0][0].url == "https://food.com"
+
+
+def test_chunk_index_empty_is_safe():
+    from backend.pipeline.embedder import ChunkIndex
+
+    index = ChunkIndex([], [], model=_FakeEmbedder())
+    assert len(index) == 0
+    assert index.search(["anything"]) == [[]]
+
+
 # Gap Analyser
 def test_coverage_computation(): # Coverage should be 0 when no entities have a value for a column
     from backend.pipeline.gap_analyzer import _compute_coverage
