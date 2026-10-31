@@ -7,7 +7,7 @@ from openai import AsyncOpenAI
 from ..config import LLM_REASONING, RANKER_MODEL
 
 from ..models import Entity, RankingInfo
-from .utils import extract_json_obj
+from ..utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
