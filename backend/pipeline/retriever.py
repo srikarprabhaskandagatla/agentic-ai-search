@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 MAX_RESULTS = 4
 MAX_CONTENT_CHARS = 8_000
 MIN_CONTENT_CHARS = 80
+PRIMARY_QUERIES = 2
+MIN_PAGES = 4
 EXCLUDED_DOMAINS = [
     "youtube.com", "pinterest.com", "instagram.com", 
     "tiktok.com", "facebook.com"
@@ -77,3 +79,13 @@ async def retrieve(queries: list[str], seen_urls: set[str]) -> list[ScrapedPage]
                 taken.add(key)
                 pages.append(page)
     return pages
+
+
+async def retrieve_with_backup(queries: list[str], seen_urls: set[str]) -> tuple[list[ScrapedPage], list[str]]:
+    primary, backup = queries[:PRIMARY_QUERIES], queries[PRIMARY_QUERIES:]
+    pages = await retrieve(primary, seen_urls)
+    if len(pages) >= MIN_PAGES or not backup:
+        return pages, primary
+    logger.info("Only %d pages from primary queries, running %d backup queries", len(pages), len(backup))
+    more = await retrieve(backup, seen_urls | {page.url for page in pages})
+    return pages + more, queries
