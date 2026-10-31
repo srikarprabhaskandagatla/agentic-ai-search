@@ -14,11 +14,10 @@ from pydantic import BaseModel, Field
 
 from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
 from backend.models import EntityTable
-from backend.pipeline import embedder, resolver, gap_analyzer
+from backend.pipeline import embedder, filler, resolver, gap_analyzer
 from backend.pipeline.planner import plan_search
 from backend.pipeline.retriever import retrieve, retrieve_with_backup
 from backend.pipeline.extractor import extract_from_pages
-from backend.pipeline.llm_filler import llm_fill_gaps
 from backend.pipeline.ranker import extract_and_rank
 
 # Logger Setup
@@ -163,11 +162,11 @@ async def search_endpoint(request: SearchRequest):
             chunk_index = embedder.ChunkIndex(all_chunks, all_vectors) if all_chunks else None
             logger.info("Chunk index ready with %d chunks", len(chunk_index) if chunk_index else 0)
 
-            # 7. LLM gap-fill - last-resort pass for still-missing values
-            await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.95)
-            all_entities = await llm_fill_gaps(
-                llm_client, all_entities, plan.columns, plan.entity_type
+            await send_progress("filling", "Filling empty cells from page text", 0.95)
+            all_entities, filled = await filler.fill_from_chunks(
+                llm_client, all_entities, plan.columns, plan.entity_type, chunk_index
             )
+            await send_progress("filling", f"Filled {filled} empty cells with sources", 0.97)
 
             # 8. Constraint-based ranking - mandatory: constraint-satisfying
             #    entities always surface to the top regardless of order.
