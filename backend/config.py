@@ -14,3 +14,5 @@ EXTRACTOR_MODEL = "openai/gpt-oss-20b"
 GAP_MODEL = "openai/gpt-oss-20b"
 FILLER_MODEL = "openai/gpt-oss-20b"
 RANKER_MODEL = "openai/gpt-oss-20b"
+
+EMBED_MODEL = "BAAI/bge-small-en-v1.5"
