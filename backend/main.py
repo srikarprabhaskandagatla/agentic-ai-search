@@ -25,6 +25,8 @@ from backend.pipeline.ranker import extract_and_rank
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+MAX_ENTITIES = 10
+
 llm_client: AsyncOpenAI | None = None
 
 @asynccontextmanager
@@ -82,6 +84,7 @@ async def search_endpoint(request: SearchRequest):
             all_entities = []
             seen_urls: set[str] = set()
             all_sources: list[str] = []
+            all_pages = []
             all_queries_used: list[str] = []
 
             # 1. Plan
@@ -109,6 +112,7 @@ async def search_endpoint(request: SearchRequest):
                 all_queries_used.extend(present_query)
                 seen_urls.update(page.url for page in pages)
                 all_sources.extend(page.url for page in pages)
+                all_pages.extend(pages)
 
                 await send_progress("searching", f"{rl}: Read {len(pages)} new pages", rp(0.40))
                 if not pages:
@@ -122,7 +126,7 @@ async def search_endpoint(request: SearchRequest):
 
                 # 5. Resolve
                 await send_progress("resolving", f"{rl}: Deduplicating and merging", rp(0.70))
-                all_entities = await resolver.resolve_entities(llm_client, all_entities)
+                all_entities = resolver.resolve_entities(all_entities, all_pages, f"{request.query} {plan.entity_type}")
                 await send_progress("resolving", f"{rl}: {len(all_entities)} unique entities", rp(0.80))
 
                 # 6. Gap Analysis
@@ -153,6 +157,7 @@ async def search_endpoint(request: SearchRequest):
             all_entities, ranking_info = await extract_and_rank(
                 llm_client, all_entities, plan.columns, request.query
             )
+            all_entities = all_entities[:MAX_ENTITIES]
 
             await send_progress("done",
                        f"Done! {len(all_entities)} entities - "
