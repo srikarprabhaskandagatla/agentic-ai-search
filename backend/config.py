@@ -11,7 +11,6 @@ LLM_REASONING = "low"
 
 PLANNER_MODEL = "openai/gpt-oss-20b"
 EXTRACTOR_MODEL = "openai/gpt-oss-20b"
-RESOLVER_MODEL = "openai/gpt-oss-20b"
 GAP_MODEL = "openai/gpt-oss-20b"
 FILLER_MODEL = "openai/gpt-oss-20b"
 RANKER_MODEL = "openai/gpt-oss-20b"
