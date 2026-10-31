@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio, uuid, logging
 from openai import AsyncOpenAI
-from ..config import EXTRACTOR_MODEL
+from ..config import LLM_REASONING, EXTRACTOR_MODEL
 from ..models import Entity, CellValue, ScrapedPage, SourceRef
 from .utils import extract_json_obj
 
@@ -69,6 +69,7 @@ async def _extract_from_page(
                     )},
                 ],
                 max_tokens=3000,
+                reasoning_effort=LLM_REASONING,
                 temperature=0.1,
             )
         except Exception as exc:
