@@ -4,6 +4,17 @@
 import asyncio, json, pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+@pytest.fixture(autouse=True)
+def _fresh_pacer():
+    from backend.config import pacer
+    old = pacer.limit
+    pacer.events.clear()
+    pacer.limit = 10 ** 9
+    yield
+    pacer.events.clear()
+    pacer.limit = old
+
+
 # Planner
 def _planner_client(payload):
     mock_client = AsyncMock()
@@ -274,72 +285,213 @@ def _pages(n):
     return [ScrapedPage(url=f"https://p{i}.com", title=f"P{i}", content=LONG_TEXT) for i in range(1, n + 1)]
 
 
-@pytest.mark.asyncio
-async def test_extractor_groups_pages_into_batches():
-    from backend.pipeline import extractor
+def test_is_missing_catches_placeholders():
+    from backend.utils import is_missing
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply({"entities": []}))
-    await extractor.extract_from_pages(mock_client, _pages(7), ["name"], "startups")
-
-    assert mock_client.chat.completions.create.call_count == 3
+    for value in [None, "", "Unknown", "N/A", "not specified.", "  undisclosed "]:
+        assert is_missing(value)
+    for value in ["2019", "Palo Alto", 0, "Series B"]:
+        assert not is_missing(value)
 
 
-@pytest.mark.asyncio
-async def test_extractor_links_entity_to_its_page():
-    from backend.pipeline import extractor
+def test_clean_markdown_removes_images_links_and_menus():
+    from backend.utils import clean_markdown
 
-    reply = {"entities": [
-        {"page": 1, "name": {"value": "Alpha", "confidence": 1.0, "snippet": "Alpha"}},
-        {"page": 2, "name": {"value": "Beta", "confidence": 1.0, "snippet": "Beta"}},
-    ]}
+    raw = "\n".join([
+        "[Skip to content](#content)",
+        "[Home](https://a.com) | [Blog](https://a.com/blog)",
+        "![logo](https://a.com/logo.png)",
+        "## 1. Abridge",
+        "Abridge raised **$250M** led by [a16z](https://a16z.com), see https://abridge.com now.",
+        "| Tempus | $14B |",
+    ])
+    assert clean_markdown(raw).splitlines() == [
+        "1. Abridge",
+        "Abridge raised $250M led by a16z, see now.",
+        "Tempus $14B",
+    ]
+
+
+def test_find_gaps_treats_placeholders_as_empty():
+    from backend.pipeline.filler import find_gaps
+
+    gaps = find_gaps([_entity("Alpha", city="unknown", focus="Notes")], ["name", "city", "focus"])
+    assert [g.column for g in gaps] == ["city"]
+
+
+def _chunks(*texts):
+    from backend.embedder import Chunk
+    return [Chunk(url=f"https://p{i}.com", title=f"P{i}", text=t) for i, t in enumerate(texts, start=1)]
+
+
+def _extract_client(reply):
     mock_client = AsyncMock()
     mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply(reply))
-    entities = await extractor.extract_from_pages(mock_client, _pages(2), ["name"], "startups")
-
-    sources = {e.get_name(): e.cells["name"].sources[0].url for e in entities}
-    assert sources == {"Alpha": "https://p1.com", "Beta": "https://p2.com"}
+    return mock_client
 
 
 @pytest.mark.asyncio
-async def test_extractor_drops_bad_page_numbers():
-    from backend.pipeline import extractor
+async def test_extractor_links_entity_to_its_chunk():
+    from backend.pipeline.extractor import extract_from_chunks
 
-    reply = {"entities": [
-        {"page": 5, "name": {"value": "Ghost"}},
-        {"page": "x", "name": {"value": "Typo"}},
-        {"name": {"value": "NoPage"}},
-        {"page": 1, "name": {"value": "Real"}},
-    ]}
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply(reply))
-    entities = await extractor.extract_from_pages(mock_client, _pages(2), ["name"], "startups")
+    client = _extract_client({"entities": [
+        {"chunk": 1, "name": {"value": "Alpha", "snippet": "Alpha"}},
+        {"chunk": 2, "name": {"value": "Beta", "snippet": "Beta"}},
+    ]})
+    entities = await extract_from_chunks(client, _chunks("Alpha is great", "Beta is good"), ["name"], "startups")
 
-    assert [e.get_name() for e in entities] == ["Real"]
+    assert {e.get_name(): e.cells["name"].sources[0].url for e in entities} == {"Alpha": "https://p1.com", "Beta": "https://p2.com"}
+    assert client.chat.completions.create.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_extractor_keeps_other_batches_when_one_fails():
-    from backend.pipeline import extractor
+async def test_extractor_finds_chunk_by_name_or_drops():
+    from backend.pipeline.extractor import extract_from_chunks
 
-    reply = {"entities": [{"page": 1, "name": {"value": "Alpha"}}]}
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(side_effect=[RuntimeError("429"), _llm_reply(reply)])
-    entities = await extractor.extract_from_pages(mock_client, _pages(4), ["name"], "startups")
+    client = _extract_client({"entities": [
+        {"chunk": 9, "name": {"value": "Hippocratic AI"}},
+        {"chunk": "x", "name": {"value": "Nowhere Inc"}},
+        {"name": {"value": "Abridge"}},
+    ]})
+    entities = await extract_from_chunks(client, _chunks("Abridge builds scribes", LONG_TEXT), ["name"], "startups")
 
-    assert [e.get_name() for e in entities] == ["Alpha"]
+    assert [(e.get_name(), e.cells["name"].sources[0].url) for e in entities] == [
+        ("Hippocratic AI", "https://p2.com"), ("Abridge", "https://p1.com")]
 
 
 @pytest.mark.asyncio
-async def test_extractor_skips_short_pages():
+async def test_extractor_drops_placeholder_values():
+    from backend.pipeline.extractor import extract_from_chunks
+
+    client = _extract_client({"entities": [{"chunk": 1, "name": {"value": "Alpha"}, "city": {"value": "Not specified"},
+                                            "funding": {"value": "unknown"}, "focus": {"value": "Clinical notes"}}]})
+    entities = await extract_from_chunks(client, _chunks("Alpha does clinical notes"), ["name", "city", "funding", "focus"], "startups")
+    assert set(entities[0].cells) == {"name", "focus"}
+
+
+@pytest.mark.asyncio
+async def test_extractor_no_chunks_no_call():
+    from backend.pipeline.extractor import extract_from_chunks
+
+    client = _extract_client({"entities": []})
+    assert await extract_from_chunks(client, [], ["name"], "startups") == []
+    client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extractor_survives_api_failure():
+    from backend.pipeline.extractor import extract_from_chunks
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError("429"))
+    assert await extract_from_chunks(client, _chunks("Alpha"), ["name"], "startups") == []
+
+
+@pytest.mark.asyncio
+async def test_extractor_cuts_chunks_to_token_budget():
     from backend.pipeline import extractor
+    from backend.config import estimate_tokens
+
+    client = _extract_client({"entities": []})
+    texts = ["word " * 400 for _ in range(30)]
+    await extractor.extract_from_chunks(client, _chunks(*texts), ["name"], "startups")
+
+    user = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert estimate_tokens(user) <= extractor.EXTRACT_INPUT_TOKENS + 100
+    assert user.count("[CHUNK") < 30
+
+
+def test_top_chunks_picks_best_within_budget_in_page_order():
+    from backend.embedder import top_chunks, embed_pages
     from backend.models import ScrapedPage
+    from backend.config import estimate_tokens
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply({"entities": []}))
-    await extractor.extract_from_pages(mock_client, [ScrapedPage(url="https://a.com", content="short")], ["name"], "startups")
+    fake = _FakeEmbedder()
+    pages = [ScrapedPage(url=f"https://p{i}.com", content=text) for i, text in enumerate([
+        "The weather today is sunny and warm with light wind across the region all day.",
+        "Hippocratic AI was founded in 2023 in Palo Alto and builds models for nurses.",
+        "Brooklyn pizza shops stay open late and serve slices to long lines every night.",
+    ])]
+    chunks, vectors = embed_pages(pages, model=fake)
+    budget = estimate_tokens(chunks[1].text) + 1
+    picked = top_chunks(chunks, vectors, "Hippocratic founded 2023", budget, model=fake)
+    assert [c.url for c in picked] == ["https://p1.com"]
 
-    mock_client.chat.completions.create.assert_not_called()
+
+def test_top_chunks_without_vectors_keeps_order():
+    from backend.embedder import top_chunks
+
+    picked = top_chunks(_chunks("a " * 10, "b " * 10, "c " * 10), None, "q", 12)
+    assert [c.url for c in picked] == ["https://p1.com", "https://p2.com"]
+
+
+def test_pacer_waits_when_minute_is_full():
+    from backend.config import TokenPacer
+
+    now = [0.0]
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+        now[0] += seconds
+
+    pacer = TokenPacer(1000, clock=lambda: now[0], sleep=fake_sleep)
+
+    async def go():
+        await pacer.reserve(800)
+        now[0] = 10.0
+        await pacer.reserve(400)
+
+    asyncio.run(go())
+    assert slept and abs(slept[0] - 50.0) < 0.01
+
+
+def test_pacer_settle_uses_real_usage():
+    from backend.config import TokenPacer
+
+    pacer = TokenPacer(1000, clock=lambda: 0.0)
+    event = asyncio.run(pacer.reserve(900))
+    pacer.settle(event, MagicMock(total_tokens=300, prompt_tokens=200, completion_tokens=100), "test")
+    assert pacer.available() == 700
+
+
+@pytest.mark.asyncio
+async def test_fill_trims_chunk_to_sentences_about_the_entity():
+    from backend.pipeline.filler import fill_from_chunks
+
+    text = ("Weather was nice. Markets went up. Rates stayed flat. Hippocratic AI was established in 2023. "
+            "It is based in Palo Alto. Bayesian Health sells sepsis tools. Pizza is great.")
+    client = _fill_client([])
+    await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                           _FakeIndex({"Hippocratic AI": [(_chunk(text), 0.9)]}))
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert "Hippocratic AI was established in 2023" in prompt
+    assert "Weather was nice" not in prompt and "Pizza is great" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_fill_never_resends_a_chunk_for_the_same_cell():
+    from backend.pipeline.filler import fill_from_chunks
+
+    index = _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]})
+    client = _fill_client([])
+    sent = {}
+    entity = _entity("Hippocratic AI")
+    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, sent=sent)
+    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, sent=sent)
+    assert client.chat.completions.create.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fill_respects_token_budget():
+    from backend.pipeline.filler import fill_from_chunks
+
+    big = [(_chunk(f"Hippocratic AI fact number {i}. " + "filler words here " * 60, f"https://h{i}.com"), 0.9) for i in range(8)]
+    client = _fill_client([])
+    await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded", "city"], "startups",
+                           _FakeIndex({"Hippocratic AI": big}), token_budget=400)
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert prompt.count("Hippocratic AI fact number") == 1
 
 
 # Resolver
@@ -507,7 +659,7 @@ class _FakeEmbedder:
 
 
 def test_chunk_pages_splits_long_page_with_overlap():
-    from backend.pipeline.embedder import chunk_pages, CHUNK_WORDS, OVERLAP_WORDS
+    from backend.embedder import chunk_pages, CHUNK_WORDS, OVERLAP_WORDS
     from backend.models import ScrapedPage
 
     words = [f"w{i}" for i in range(200)]
@@ -520,14 +672,14 @@ def test_chunk_pages_splits_long_page_with_overlap():
 
 
 def test_chunk_pages_skips_tiny_pages():
-    from backend.pipeline.embedder import chunk_pages
+    from backend.embedder import chunk_pages
     from backend.models import ScrapedPage
 
     assert chunk_pages([ScrapedPage(url="https://a.com", content="too short")]) == []
 
 
 def test_chunk_index_finds_the_right_page():
-    from backend.pipeline.embedder import embed_pages, ChunkIndex
+    from backend.embedder import embed_pages, ChunkIndex
     from backend.models import ScrapedPage
 
     fake = _FakeEmbedder()
@@ -544,7 +696,7 @@ def test_chunk_index_finds_the_right_page():
 
 
 def test_chunk_index_empty_is_safe():
-    from backend.pipeline.embedder import ChunkIndex
+    from backend.embedder import ChunkIndex
 
     index = ChunkIndex([], [], model=_FakeEmbedder())
     assert len(index) == 0
@@ -568,7 +720,7 @@ HIPPO_TEXT = "Hippocratic AI was established in 2023 and is headquartered in Pal
 
 
 def _chunk(text=HIPPO_TEXT, url="https://hippo.com"):
-    from backend.pipeline.embedder import Chunk
+    from backend.embedder import Chunk
     return Chunk(url=url, title="Hippo", text=text)
 
 
@@ -711,26 +863,153 @@ async def test_fill_does_nothing_without_index_or_gaps():
     client.chat.completions.create.assert_not_called()
 
 
-# Gap Analyser
-def test_coverage_computation(): # Coverage should be 0 when no entities have a value for a column
-    from backend.pipeline.gap_analyzer import _compute_coverage
-    from backend.models import Entity, CellValue, SourceRef
-    import uuid
+def test_targeted_queries_one_per_entity_with_missing_columns():
+    from backend.pipeline.filler import find_gaps, targeted_queries
 
-    entities = [
-        Entity(id=str(uuid.uuid4()), cells={
-            "name": CellValue(value="A", confidence=1.0, sources=[]),
-            # no founded_year
-        }),
-        Entity(id=str(uuid.uuid4()), cells={
-            "name": CellValue(value="B", confidence=1.0, sources=[]),
-            "founded_year": CellValue(value="2020", confidence=0.9, sources=[]),
-        }),
-    ]
+    gaps = find_gaps([_entity("Hippocratic AI"), _entity("Abridge", key_product="Scribe")],
+                     ["name", "focus_area", "key_product"])
+    assert targeted_queries(gaps, "startups", 2) == ["Hippocratic AI focus area key product", "Abridge focus area"]
+    assert targeted_queries(gaps, "startups", 3)[0] == "Hippocratic AI startups focus area key product"
 
-    cov = _compute_coverage(entities, ["name", "founded_year"])
-    assert cov["name"] == 1.0
-    assert cov["founded_year"] == 0.5
+
+def test_targeted_queries_capped():
+    from backend.pipeline.filler import find_gaps, targeted_queries, MAX_TARGETED
+
+    gaps = find_gaps([_entity(f"Company {i}") for i in range(12)], ["name", "focus_area"])
+    assert len(targeted_queries(gaps, "startups", 2)) == MAX_TARGETED
+
+
+def test_chunk_index_add_grows_the_index():
+    from backend.embedder import embed_pages, ChunkIndex
+    from backend.models import ScrapedPage
+
+    fake = _FakeEmbedder()
+    index = ChunkIndex([], [], model=fake)
+    chunks, vectors = embed_pages([ScrapedPage(url="https://a.com", content="Hippocratic AI was founded in 2023 in Palo Alto for nurses.")], model=fake)
+    index.add(chunks, vectors)
+
+    assert len(index) == 1
+    assert index.search(["Hippocratic founded"], k=1)[0][0][0].url == "https://a.com"
+
+
+class _LoopIndex(_FakeIndex):
+    def __init__(self):
+        super().__init__({})
+        self.added = []
+
+    def add(self, chunks, vectors):
+        self.added.extend(chunks)
+        for chunk in chunks:
+            self.hits_by_entity["Hippocratic AI"] = [(chunk, 0.9)]
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_fast_mode_fills_once_and_never_searches():
+    from backend.pipeline import filler
+
+    client = _fill_client([])
+    with patch.object(filler, "retrieve", AsyncMock()) as mock_retrieve:
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                        _LoopIndex(), set(), max_fills=1)
+
+    assert result.rounds == 1
+    mock_retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_searches_and_fills_in_round_two():
+    from backend.pipeline import filler
+    from backend.models import ScrapedPage
+
+    page = ScrapedPage(url="https://hippo.com", title="Hippo", content=HIPPO_TEXT)
+    client = _fill_client([{"id": 0, "value": "2023", "chunk": "c1", "quote": "was established in 2023"}])
+    seen = set()
+    with patch.object(filler, "retrieve", AsyncMock(return_value=[page])) as mock_retrieve, \
+         patch.object(filler, "embed_pages", lambda pages: ([_chunk()], MagicMock(size=1))):
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                        _LoopIndex(), seen, max_fills=3)
+
+    assert result.entities[0].cells["founded"].value == "2023"
+    assert result.filled == 1
+    assert result.rounds == 2
+    assert result.queries == ["Hippocratic AI founded"]
+    assert result.sources == ["https://hippo.com"]
+    assert "https://hippo.com" in seen
+    assert mock_retrieve.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_stops_when_a_round_fills_nothing():
+    from backend.pipeline import filler
+    from backend.models import ScrapedPage
+
+    page = ScrapedPage(url="https://other.com", content=HIPPO_TEXT)
+    client = _fill_client([{"id": 0, "value": None, "chunk": None, "quote": None}])
+    with patch.object(filler, "retrieve", AsyncMock(return_value=[page])) as mock_retrieve, \
+         patch.object(filler, "embed_pages", lambda pages: ([_chunk()], MagicMock(size=1))):
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                        _LoopIndex(), set(), max_fills=3)
+
+    assert result.rounds == 2
+    assert mock_retrieve.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_stops_when_nothing_is_empty():
+    from backend.pipeline import filler
+
+    client = _fill_client([])
+    with patch.object(filler, "retrieve", AsyncMock()) as mock_retrieve:
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI", founded="2023")], ["name", "founded"],
+                                        "startups", _LoopIndex(), set(), max_fills=3)
+
+    assert result.rounds == 1
+    mock_retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_stops_when_search_finds_no_new_pages():
+    from backend.pipeline import filler
+
+    client = _fill_client([])
+    with patch.object(filler, "retrieve", AsyncMock(return_value=[])) as mock_retrieve:
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                        _LoopIndex(), set(), max_fills=3)
+
+    assert result.rounds == 1
+    assert mock_retrieve.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_survives_search_failure():
+    from backend.pipeline import filler
+
+    client = _fill_client([])
+    with patch.object(filler, "retrieve", AsyncMock(side_effect=RuntimeError("tavily down"))):
+        result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                        _LoopIndex(), set(), max_fills=3)
+    assert result.rounds == 1
+
+
+@pytest.mark.asyncio
+async def test_fill_loop_without_index_does_nothing():
+    from backend.pipeline import filler
+
+    client = _fill_client([])
+    result = await filler.fill_loop(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                    None, set(), max_fills=3)
+    assert result.rounds == 0
+    client.chat.completions.create.assert_not_called()
+
+
+def test_quote_check_accepts_number_with_unit():
+    from backend.pipeline.filler import _quote_ok
+    from backend.embedder import Chunk
+
+    chunk = Chunk(url="https://a.com", title="", text="Abridge raised $800M in total funding last year.")
+    assert _quote_ok("800", "raised $800M in total funding", chunk)
+    assert not _quote_ok("80", "raised $800M in total funding", chunk)
+    assert not _quote_ok("900", "raised $800M in total funding", chunk)
 
 
 # Models
@@ -762,145 +1041,3 @@ def test_cell_value_llm_filled_default():# CellValue.llm_filled should default t
 
     c = CellValue(value="Series B", confidence=0.9, sources=[])
     assert c.llm_filled is False
-
-
-# LLM Filler (Stage 7)
-@pytest.mark.asyncio
-async def test_llm_filler_fills_missing_cells(): # LLM filler should populate null cells and mark them llm_filled=True
-    from backend.pipeline.llm_filler import llm_fill_gaps
-    from backend.models import Entity, CellValue
-    import uuid
-
-    entity = Entity(
-        id=str(uuid.uuid4()),
-        cells={
-            "name": CellValue(value="Abridge", confidence=1.0, sources=[]),
-            "description": CellValue(value="Clinical documentation AI", confidence=0.9, sources=[]),
-            # founded_year and headquarters deliberately missing
-        }
-    )
-
-    llm_response = json.dumps([
-        {"name": "Abridge", "founded_year": "2018", "headquarters": "Pittsburgh, PA"}
-    ])
-
-    mock_choice = MagicMock()
-    mock_choice.message.content = llm_response
-
-    mock_resp = MagicMock()
-    mock_resp.choices = [mock_choice]
-
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
-
-    columns = ["name", "description", "founded_year", "headquarters"]
-    result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
-
-    assert len(result) == 1
-    e = result[0]
-    assert e.cells["founded_year"].value == "2018"
-    assert e.cells["founded_year"].llm_filled is True
-    assert e.cells["founded_year"].confidence == 0.5
-    assert e.cells["headquarters"].value == "Pittsburgh, PA"
-    assert e.cells["headquarters"].llm_filled is True
-    # Already-filled cells should be unchanged
-    assert e.cells["description"].value == "Clinical documentation AI"
-    assert e.cells["description"].llm_filled is False
-
-
-@pytest.mark.asyncio
-async def test_llm_filler_skips_null_responses():
-    from backend.pipeline.llm_filler import llm_fill_gaps
-    from backend.models import Entity, CellValue
-    import uuid
-
-    entity = Entity(
-        id=str(uuid.uuid4()),
-        cells={"name": CellValue(value="Healthcare AI", confidence=1.0, sources=[])}
-    )
-
-    llm_response = json.dumps([
-        {"name": "Healthcare AI", "founded_year": None, "headquarters": None}
-    ])
-
-    mock_choice = MagicMock()
-    mock_choice.message.content = llm_response
-    mock_resp = MagicMock()
-    mock_resp.choices = [mock_choice]
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
-
-    columns = ["name", "founded_year", "headquarters"]
-    result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
-
-    e = result[0]
-    assert "founded_year" not in e.cells or e.cells.get("founded_year") is None or e.cells["founded_year"].value is None
-
-
-@pytest.mark.asyncio
-async def test_llm_filler_skips_entities_with_no_gaps():
-    from backend.pipeline.llm_filler import llm_fill_gaps
-    from backend.models import Entity, CellValue
-    import uuid
-
-    entity = Entity(
-        id=str(uuid.uuid4()),
-        cells={
-            "name": CellValue(value="Abridge", confidence=1.0, sources=[]),
-            "founded_year": CellValue(value="2018", confidence=0.9, sources=[]),
-        }
-    )
-
-    mock_client = AsyncMock()
-    columns = ["name", "founded_year"]
-    result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
-
-    # API should never be called - nothing to fill
-    mock_client.chat.completions.create.assert_not_called()
-    assert result[0].cells["founded_year"].value == "2018"
-
-
-@pytest.mark.asyncio
-async def test_llm_filler_graceful_on_api_failure():
-    from backend.pipeline.llm_filler import llm_fill_gaps
-    from backend.models import Entity, CellValue
-    import uuid
-
-    entity = Entity(
-        id=str(uuid.uuid4()),
-        cells={"name": CellValue(value="Abridge", confidence=1.0, sources=[])}
-    )
-
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("API down"))
-
-    columns = ["name", "founded_year"]
-    result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
-
-    assert result == [entity]  # unchanged
-    assert "founded_year" not in result[0].cells
-
-
-@pytest.mark.asyncio
-async def test_llm_filler_strips_markdown_fences():
-    from backend.pipeline.llm_filler import llm_fill_gaps
-    from backend.models import Entity, CellValue
-    import uuid
-
-    entity = Entity(
-        id=str(uuid.uuid4()),
-        cells={"name": CellValue(value="Abridge", confidence=1.0, sources=[])}
-    )
-
-    fenced = "```json\n" + json.dumps([{"name": "Abridge", "founded_year": "2018"}]) + "\n```"
-    mock_choice = MagicMock()
-    mock_choice.message.content = fenced
-    mock_resp = MagicMock()
-    mock_resp.choices = [mock_choice]
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
-
-    columns = ["name", "founded_year"]
-    result = await llm_fill_gaps(mock_client, [entity], columns, "AI startups")
-
-    assert result[0].cells["founded_year"].value == "2018"
