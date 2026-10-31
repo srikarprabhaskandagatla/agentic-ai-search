@@ -1,7 +1,6 @@
 const STAGES = [
   ["planning", "Plan"],
-  ["searching", "Search"],
-  ["scraping", "Scrape"],
+  ["searching", "Retrieve"],
   ["extracting", "Extract"],
   ["resolving", "Resolve"],
   ["analyzing", "Gaps"],
