@@ -116,6 +116,76 @@ async def test_retriever_survives_one_failed_query():
     assert [p.url for p in pages] == ["https://a.com"]
 
 
+def test_normalize_url_merges_copies_of_one_page():
+    from backend.pipeline.retriever import normalize_url
+
+    copies = [
+        "https://techcrunch.com/hippocratic-ai-raises",
+        "http://techcrunch.com/hippocratic-ai-raises/",
+        "https://www.TechCrunch.com/hippocratic-ai-raises?utm_source=twitter&utm_medium=social",
+        "https://techcrunch.com/hippocratic-ai-raises#comments",
+        "https://techcrunch.com/hippocratic-ai-raises?fbclid=abc123",
+    ]
+    assert len({normalize_url(u) for u in copies}) == 1
+
+
+def test_normalize_url_keeps_real_query_params():
+    from backend.pipeline.retriever import normalize_url
+
+    assert normalize_url("https://a.com/item?id=1") != normalize_url("https://a.com/item?id=2")
+    assert normalize_url("https://a.com/item?id=1&utm_source=x") == normalize_url("https://a.com/item?id=1")
+
+
+def test_normalize_url_keeps_path_case():
+    from backend.pipeline.retriever import normalize_url
+
+    assert normalize_url("https://a.com/Docs") != normalize_url("https://a.com/docs")
+    assert normalize_url("https://a.com") == normalize_url("https://a.com/")
+
+
+@pytest.mark.asyncio
+async def test_retriever_skips_near_duplicate_urls():
+    from backend.pipeline import retriever
+
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(side_effect=[
+        {"results": [{"url": "https://a.com/page", "raw_content": LONG_TEXT}]},
+        {"results": [
+            {"url": "http://www.a.com/page/?utm_source=x", "raw_content": LONG_TEXT},
+            {"url": "https://b.com/page", "raw_content": LONG_TEXT},
+        ]},
+    ])
+    with patch.object(retriever, "_client", return_value=mock_client):
+        pages = await retriever.retrieve(["q1", "q2"], seen_urls={"https://c.com/"})
+
+    assert [p.url for p in pages] == ["https://a.com/page", "https://b.com/page"]
+
+
+@pytest.mark.asyncio
+async def test_retriever_skips_seen_urls_written_differently():
+    from backend.pipeline import retriever
+
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(return_value={"results": [{"url": "https://www.a.com/page/", "raw_content": LONG_TEXT}]})
+    with patch.object(retriever, "_client", return_value=mock_client):
+        pages = await retriever.retrieve(["q1"], seen_urls={"https://a.com/page"})
+
+    assert pages == []
+
+
+@pytest.mark.asyncio
+async def test_retriever_excludes_low_value_domains():
+    from backend.pipeline import retriever
+
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(return_value={"results": []})
+    with patch.object(retriever, "_client", return_value=mock_client):
+        await retriever.retrieve(["q1"], seen_urls=set())
+
+    assert mock_client.search.call_args.kwargs["exclude_domains"] == retriever.EXCLUDED_DOMAINS
+    assert "youtube.com" in retriever.EXCLUDED_DOMAINS
+
+
 @pytest.mark.asyncio
 async def test_retriever_raises_when_all_queries_fail():
     from backend.pipeline import retriever
