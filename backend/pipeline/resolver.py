@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 import json, re, unicodedata, logging
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import RESOLVER_MODEL
 from ..models import Entity, CellValue, SourceRef
 from .utils import extract_json_obj
 
@@ -80,9 +81,9 @@ Respond with ONLY a JSON object — no other text:
 Each index must appear in exactly one group."""
 
 
-async def _llm_dedup(client: AsyncCerebras, name_index: list[dict]) -> list[list[int]]:
+async def _llm_dedup(client: AsyncOpenAI, name_index: list[dict]) -> list[list[int]]:
     response = await client.chat.completions.create(
-        model="qwen-3-235b-a22b-instruct-2507",
+        model=RESOLVER_MODEL,
         messages=[
             {"role": "system", "content": DEDUP_SYSTEM},
             {"role": "user", "content": f"Deduplicate:\n{json.dumps(name_index, indent=2)}"},
@@ -96,7 +97,7 @@ async def _llm_dedup(client: AsyncCerebras, name_index: list[dict]) -> list[list
     return data.get("merge_groups", [[i] for i in range(len(name_index))])
 
 
-async def resolve_entities(client: AsyncCerebras, raw_entities: list[Entity]) -> list[Entity]:
+async def resolve_entities(client: AsyncOpenAI, raw_entities: list[Entity]) -> list[Entity]:
     if not raw_entities:
         return []
 
