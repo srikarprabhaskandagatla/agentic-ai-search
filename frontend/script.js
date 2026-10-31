@@ -21,7 +21,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const label = col => col.replace(/_/g, " ");
 
-const state = { result: null, controller: null, depth: 2 };
+const state = { result: null, controller: null, depth: 1 };
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>';
@@ -209,19 +209,20 @@ function renderResults(data) {
     ? `<span class="tag">Ranked by</span>` + ranking.labels.map(l => `<span class="pill">${esc(l)}</span>`).join("")
     : "";
 
-  $("thead").innerHTML = `<tr>${hasRanking ? `<th class="match">Match</th>` : ""}${columns.map(c => `<th>${esc(label(c))}</th>`).join("")}<th class="count">Sources</th></tr>`;
+  const headers = columns.map(c => `<th>${esc(label(c))}</th>`);
+  if (hasRanking) headers.splice(1, 0, `<th class="match">Match</th>`);
+  $("thead").innerHTML = `<tr>${headers.join("")}</tr>`;
 
   $("tbody").innerHTML = entities.map(entity => {
     const entitySources = [];
-    let match = "";
+    const cells = columns.map(col => cellHtml(col, entity.cells[col], entitySources));
     if (hasRanking) {
       const n = ranking.scores[entity.id] ?? 0;
       const share = n / ranking.total;
       const cls = share === 1 ? "full" : share >= 0.5 ? "part" : "none";
-      match = `<td class="match"><span class="badge ${cls}" title="${n} of ${ranking.total} rules met">${n}/${ranking.total}</span></td>`;
+      cells.splice(1, 0, `<td class="match"><span class="badge ${cls}" title="${n} of ${ranking.total} rules met">${n}/${ranking.total}</span></td>`);
     }
-    const cells = columns.map(col => cellHtml(col, entity.cells[col], entitySources)).join("");
-    return `<tr>${match}${cells}<td class="count">${entitySources.length}</td></tr>`;
+    return `<tr>${cells.join("")}</tr>`;
   }).join("");
 
   const hasLlm = entities.some(e => Object.values(e.cells || {}).some(c => c.llm_filled));
@@ -310,6 +311,7 @@ function init() {
   const saved = readStore("ais-theme");
   applyTheme(saved === "light" || saved === "dark" ? saved : currentTheme());
   setBusy(false);
+  setDepth(state.depth);
   $("depth").addEventListener("click", e => {
     const b = e.target.closest("button[data-depth]");
     if (b) setDepth(Number(b.dataset.depth));
