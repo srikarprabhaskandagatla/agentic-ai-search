@@ -44,6 +44,7 @@ class SearchPlan(BaseModel):
     columns: list[str]        # Inferred schema columns (always starts with "name")
     search_queries: list[str] # Diverse queries to cover different angles
     rationale: str
+    rules: dict = Field(default_factory=dict)
 
 
 class ScrapedPage(BaseModel):
