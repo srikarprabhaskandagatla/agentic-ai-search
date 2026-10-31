@@ -12,12 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
+from backend.config import EXTRACT_INPUT_TOKENS, LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
 from backend.models import EntityTable
-from backend.pipeline import embedder, filler, resolver, gap_analyzer
+from backend import embedder
+from backend.pipeline import filler, resolver
 from backend.pipeline.planner import plan_search
 from backend.pipeline.retriever import retrieve, retrieve_with_backup
-from backend.pipeline.extractor import extract_from_pages
+from backend.pipeline.extractor import extract_from_chunks
 from backend.pipeline.ranker import extract_and_rank
 
 # Logger Setup
@@ -25,6 +26,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 MAX_ENTITIES = 10
+MAX_FILLS = 3
+MIN_ENTITIES = 8
 
 llm_client: AsyncOpenAI | None = None
 
@@ -88,8 +91,6 @@ async def search_endpoint(request: SearchRequest):
             seen_urls: set[str] = set()
             all_sources: list[str] = []
             all_pages = []
-            all_chunks = []
-            all_vectors = []
             all_queries_used: list[str] = []
 
             # 1. Plan
@@ -99,74 +100,84 @@ async def search_endpoint(request: SearchRequest):
                        f"Schema: {len(plan.columns)} columns for '{plan.entity_type}'",
                        0.10, f"Columns: {', '.join(plan.columns)}")
 
-            present_query = plan.search_queries
-            completed_rounds = 0
+            context = f"{request.query} {plan.entity_type}"
+            agentic = request.search_depth > 1
 
-            for round_idx in range(request.search_depth):
-                completed_rounds = round_idx + 1
-                rl = f"Round {round_idx+1}/{request.search_depth}"
-                rs = 0.10 + round_idx * (0.85 / request.search_depth)
-                rspan = 0.85 / request.search_depth
-                rp = lambda f, _rs=rs, _rspan=rspan: _rs + f * _rspan
-
-                await send_progress("searching", f"{rl}: Searching the web", rp(0.05))
-                if round_idx == 0:
-                    pages, present_query = await retrieve_with_backup(present_query, seen_urls)
-                else:
-                    pages = await retrieve(present_query, seen_urls)
-                all_queries_used.extend(present_query)
+            def keep_pages(pages):
                 seen_urls.update(page.url for page in pages)
                 all_sources.extend(page.url for page in pages)
                 all_pages.extend(pages)
 
-                await send_progress("searching", f"{rl}: Read {len(pages)} new pages", rp(0.40))
-                if not pages:
-                    break
+            try:
+                chunk_index = embedder.ChunkIndex([], [])
+            except Exception as exc:
+                logger.warning("Chunk index unavailable: %s", exc)
+                chunk_index = None
 
-                embed_task = asyncio.create_task(asyncio.to_thread(embedder.embed_pages, pages))
+            # 2. Search
+            await send_progress("searching", "Searching the web", 0.12)
+            pages, used = await retrieve_with_backup(plan.search_queries, seen_urls)
+            all_queries_used.extend(used)
+            keep_pages(pages)
+            await send_progress("searching", f"Read {len(pages)} pages", 0.25)
 
-                # 4. Extract
-                await send_progress("extracting", f"{rl}: Extracting entities", rp(0.45))
-                new_raw = await extract_from_pages(llm_client, pages, plan.columns, plan.entity_type)
-                await send_progress("extracting", f"{rl}: Found {len(new_raw)} entity mentions", rp(0.65))
-                all_entities.extend(new_raw)
-
-                # 5. Resolve
-                await send_progress("resolving", f"{rl}: Deduplicating and merging", rp(0.70))
-                all_entities = resolver.resolve_entities(all_entities, all_pages, f"{request.query} {plan.entity_type}")
-                await send_progress("resolving", f"{rl}: {len(all_entities)} unique entities", rp(0.80))
-
+            async def read_pages(pages):
+                nonlocal all_entities
+                await send_progress("extracting", f"Reading {len(pages)} pages", 0.28)
                 try:
-                    chunks, vectors = await embed_task
-                    all_chunks.extend(chunks)
-                    all_vectors.append(vectors)
+                    chunks, vectors = await asyncio.to_thread(embedder.embed_pages, pages)
+                    if chunk_index is not None:
+                        chunk_index.add(chunks, vectors)
                 except Exception as exc:
-                    logger.warning("Embedding failed for this round: %s", exc)
+                    logger.warning("Embedding failed: %s", exc)
+                    chunks, vectors = embedder.chunk_pages(pages), None
+                topic = f"{plan.entity_type}: {', '.join(plan.columns)}"
+                best = await asyncio.to_thread(embedder.top_chunks, chunks, vectors, topic, EXTRACT_INPUT_TOKENS)
 
-                # 6. Gap Analysis
-                if round_idx < request.search_depth - 1:
-                    await send_progress("analyzing", "Checking data coverage", rp(0.88))
-                    gap = await gap_analyzer.analyze_gaps(
-                        llm_client, all_entities, plan.columns,
-                        request.query, plan.entity_type
-                    )
-                    if gap.get("should_continue") and gap.get("gap_queries"):
-                        present_query = gap["gap_queries"]
-                        await send_progress("analyzing",
-                                   f"Gaps found - running follow-up: {gap.get('gap_summary', '')}",
-                                   rp(0.92))
-                    else:
-                        await send_progress("analyzing", "Coverage sufficient - stopping early", rp(0.92))
-                        break
+                # 3. Extract
+                await send_progress("extracting", f"Extracting entities from {len(best)} best chunks", 0.32)
+                all_entities.extend(await extract_from_chunks(llm_client, best, plan.columns, plan.entity_type))
 
-            chunk_index = embedder.ChunkIndex(all_chunks, all_vectors) if all_chunks else None
-            logger.info("Chunk index ready with %d chunks", len(chunk_index) if chunk_index else 0)
+                # 4. Resolve
+                await send_progress("resolving", "Merging duplicate entities", 0.45)
+                all_entities = resolver.resolve_entities(all_entities, all_pages, context)
+                await send_progress("resolving", f"{len(all_entities)} unique entities", 0.50)
 
-            await send_progress("filling", "Filling empty cells from page text", 0.95)
-            all_entities, filled = await filler.fill_from_chunks(
-                llm_client, all_entities, plan.columns, plan.entity_type, chunk_index
+            if pages:
+                await read_pages(pages)
+
+            unused = [q for q in plan.search_queries if q not in used]
+
+            # When is Selected Agentic
+            if agentic and len(all_entities) < MIN_ENTITIES and unused:
+                await send_progress("searching", f"Only {len(all_entities)} entities, searching more", 0.52)
+                try:
+                    more = await retrieve(unused, seen_urls)
+                except Exception as exc:
+                    logger.warning("Backup search failed: %s", exc)
+                    more = []
+                all_queries_used.extend(unused)
+                keep_pages(more)
+                if more:
+                    await read_pages(more)
+
+            fill_step = 0
+
+            async def fill_progress(message):
+                nonlocal fill_step
+                fill_step += 1
+                await send_progress("filling", message, min(0.60 + 0.05 * fill_step, 0.92))
+
+            # 5. Fill
+            await send_progress("filling", "Filling empty cells from page text", 0.58)
+            fill = await filler.fill_loop(
+                llm_client, all_entities, plan.columns, plan.entity_type,
+                chunk_index, seen_urls, MAX_FILLS if agentic else 1, fill_progress,
             )
-            await send_progress("filling", f"Filled {filled} empty cells with sources", 0.97)
+            all_entities = fill.entities
+            all_queries_used.extend(fill.queries)
+            all_sources.extend(fill.sources)
+            completed_rounds = max(fill.rounds, 1)
 
             # 8. Constraint-based ranking - mandatory: constraint-satisfying
             #    entities always surface to the top regardless of order.
