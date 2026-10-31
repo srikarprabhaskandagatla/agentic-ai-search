@@ -16,7 +16,7 @@ from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVI
 from backend.models import EntityTable
 from backend.pipeline import resolver, gap_analyzer
 from backend.pipeline.planner import plan_search
-from backend.pipeline.retriever import retrieve
+from backend.pipeline.retriever import retrieve, retrieve_with_backup
 from backend.pipeline.extractor import extract_from_pages
 from backend.pipeline.llm_filler import llm_fill_gaps
 from backend.pipeline.ranker import extract_and_rank
@@ -101,8 +101,11 @@ async def search_endpoint(request: SearchRequest):
                 rspan = 0.85 / request.search_depth
                 rp = lambda f, _rs=rs, _rspan=rspan: _rs + f * _rspan
 
-                await send_progress("searching", f"{rl}: Searching with {len(present_query)} queries", rp(0.05))
-                pages = await retrieve(present_query, seen_urls)
+                await send_progress("searching", f"{rl}: Searching the web", rp(0.05))
+                if round_idx == 0:
+                    pages, present_query = await retrieve_with_backup(present_query, seen_urls)
+                else:
+                    pages = await retrieve(present_query, seen_urls)
                 all_queries_used.extend(present_query)
                 seen_urls.update(page.url for page in pages)
                 all_sources.extend(page.url for page in pages)
