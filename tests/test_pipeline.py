@@ -515,6 +515,166 @@ def test_chunk_index_empty_is_safe():
     assert index.search(["anything"]) == [[]]
 
 
+class _FakeIndex:
+    def __init__(self, hits_by_entity):
+        self.hits_by_entity = hits_by_entity
+        self.queries = []
+
+    def __len__(self):
+        return 1
+
+    def search(self, queries, k=3):
+        self.queries.extend(queries)
+        return [next((h for name, h in self.hits_by_entity.items() if q.startswith(name)), []) for q in queries]
+
+
+HIPPO_TEXT = "Hippocratic AI was established in 2023 and is headquartered in Palo Alto, California."
+
+
+def _chunk(text=HIPPO_TEXT, url="https://hippo.com"):
+    from backend.pipeline.embedder import Chunk
+    return Chunk(url=url, title="Hippo", text=text)
+
+
+def _fill_client(cells):
+    mock_client = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply({"cells": cells}))
+    return mock_client
+
+
+def test_find_gaps_skips_name_and_filled_cells():
+    from backend.pipeline.filler import find_gaps
+
+    gaps = find_gaps([_entity("Hippocratic AI", founded="2023")], ["name", "founded", "headquarters"])
+    assert [(g.entity.get_name(), g.column) for g in gaps] == [("Hippocratic AI", "headquarters")]
+
+
+@pytest.mark.asyncio
+async def test_fill_puts_value_with_source_and_quote():
+    from backend.pipeline.filler import fill_from_chunks
+
+    entity = _entity("Hippocratic AI")
+    client = _fill_client([{"id": 0, "value": "2023", "chunk": "c1", "quote": "was established in 2023"}])
+    out, filled = await fill_from_chunks(client, [entity], ["name", "founded"], "startups",
+                                         _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+
+    cell = out[0].cells["founded"]
+    assert filled == 1
+    assert cell.value == "2023"
+    assert cell.sources[0].url == "https://hippo.com"
+    assert cell.sources[0].snippet == "was established in 2023"
+    assert cell.llm_filled is False
+
+
+@pytest.mark.asyncio
+async def test_fill_drops_value_when_quote_not_in_chunk():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([{"id": 0, "value": "2019", "chunk": "c1", "quote": "was founded in 2019"}])
+    out, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                         _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+
+    assert filled == 0
+    assert "founded" not in out[0].cells
+
+
+@pytest.mark.asyncio
+async def test_fill_drops_value_not_inside_its_quote():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([{"id": 0, "value": "2024", "chunk": "c1", "quote": "was established in 2023"}])
+    _, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                       _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+    assert filled == 0
+
+
+@pytest.mark.asyncio
+async def test_fill_skips_chunks_that_do_not_name_the_entity():
+    from backend.pipeline.filler import fill_from_chunks
+
+    other = _chunk("Bayesian Health was established in 2018 in New York.", "https://bayes.com")
+    client = _fill_client([])
+    _, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                       _FakeIndex({"Hippocratic AI": [(other, 0.95)]}))
+
+    assert filled == 0
+    client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_skips_low_score_chunks():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([])
+    await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                           _FakeIndex({"Hippocratic AI": [(_chunk(), 0.3)]}))
+    client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_rejects_chunk_not_offered_to_that_cell():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([{"id": 0, "value": "2023", "chunk": "c9", "quote": "was established in 2023"}])
+    _, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                       _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+    assert filled == 0
+
+
+@pytest.mark.asyncio
+async def test_fill_ignores_bad_cell_ids_and_nulls():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([
+        {"id": 7, "value": "2023", "chunk": "c1", "quote": "was established in 2023"},
+        {"id": "0", "value": "2023", "chunk": "c1", "quote": "was established in 2023"},
+        {"id": 0, "value": None, "chunk": None, "quote": None},
+    ])
+    _, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                       _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+    assert filled == 0
+
+
+@pytest.mark.asyncio
+async def test_fill_sends_shared_chunk_once():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([
+        {"id": 0, "value": "2023", "chunk": "c1", "quote": "was established in 2023"},
+        {"id": 1, "value": "Palo Alto, California", "chunk": "c1", "quote": "headquartered in Palo Alto, California"},
+    ])
+    out, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded", "headquarters"], "startups",
+                                         _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert prompt.count(HIPPO_TEXT) == 1
+    assert filled == 2
+    assert out[0].cells["headquarters"].value == "Palo Alto, California"
+
+
+@pytest.mark.asyncio
+async def test_fill_survives_api_failure():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError("429"))
+    out, filled = await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups",
+                                         _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+    assert filled == 0
+    assert "founded" not in out[0].cells
+
+
+@pytest.mark.asyncio
+async def test_fill_does_nothing_without_index_or_gaps():
+    from backend.pipeline.filler import fill_from_chunks
+
+    client = _fill_client([])
+    await fill_from_chunks(client, [_entity("Hippocratic AI")], ["name", "founded"], "startups", None)
+    await fill_from_chunks(client, [_entity("Hippocratic AI", founded="2023")], ["name", "founded"], "startups",
+                           _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]}))
+    client.chat.completions.create.assert_not_called()
+
+
 # Gap Analyser
 def test_coverage_computation(): # Coverage should be 0 when no entities have a value for a column
     from backend.pipeline.gap_analyzer import _compute_coverage
