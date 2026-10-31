@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="CIIR Agentic Search API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="CiteTable API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class SearchRequest(BaseModel):
@@ -45,24 +45,24 @@ class SearchRequest(BaseModel):
     search_depth: int = Field(default=2, ge=1, le=3)
 
 
-@app.get("/api/health")
+@app.get("/health")
 async def health():
     return {"status": "ok", "version": app.version, "llm": "cerebras/qwen-3-235b-a22b-instruct-2507", "search": "tavily"}
 
 
-@app.get("/api/example-queries")
+@app.get("/example-queries")
 async def example_queries():
     return {"examples": [
         "AI startups in healthcare",
         "top pizza places in Brooklyn",
         "open source database tools",
-        "autonomous vehicle companies 2024",
+        "autonomous vehicle companies 2026",
         "no-code app building tools",
         "large language model providers",
     ]}
 
 
-@app.post("/api/search")
+@app.post("/search")
 async def search_endpoint(request: SearchRequest):
     if cerebras_client is None:
         raise HTTPException(status_code=503, detail="Cerebras client not configured")
