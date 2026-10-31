@@ -4,7 +4,7 @@
 from __future__ import annotations
 import json, logging
 from openai import AsyncOpenAI
-from ..config import FILLER_MODEL
+from ..config import LLM_REASONING, FILLER_MODEL
 from ..models import Entity, CellValue
 from .utils import extract_json_arr
 
@@ -62,6 +62,7 @@ async def llm_fill_gaps(
             model=FILLER_MODEL,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1500,
+            reasoning_effort=LLM_REASONING,
             temperature=0.1,
         )
         raw = resp.choices[0].message.content.strip()
