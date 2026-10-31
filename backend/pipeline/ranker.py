@@ -3,14 +3,14 @@ from __future__ import annotations
 import re, logging
 from typing import Any
 
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import RANKER_MODEL
 
 from ..models import Entity, RankingInfo
 from .utils import extract_json_obj
 
 logger = logging.getLogger(__name__)
 
-MODEL = "qwen-3-235b-a22b-instruct-2507"
 
 _US_STATES_FULL = {
     "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
@@ -229,10 +229,10 @@ Examples:
 """
 
 
-async def _extract_constraints_llm(client: AsyncCerebras, query: str) -> dict:
+async def _extract_constraints_llm(client: AsyncOpenAI, query: str) -> dict:
     try:
         resp = await client.chat.completions.create(
-            model=MODEL,
+            model=RANKER_MODEL,
             messages=[
                 {"role": "system", "content": _CONSTRAINT_SYSTEM},
                 {"role": "user", "content": query},
@@ -413,7 +413,7 @@ def rank_entities(
 
 
 async def extract_and_rank(
-    client: AsyncCerebras,
+    client: AsyncOpenAI,
     entities: list[Entity],
     columns: list[str],
     query: str,
