@@ -1,428 +1,150 @@
 from __future__ import annotations
-
-import re, logging
+import logging, re
 from typing import Any
 
-from openai import AsyncOpenAI
-from ..config import LLM_REASONING, RANKER_MODEL
+import numpy as np
 
 from ..models import Entity, RankingInfo
-from ..utils import extract_json_obj
+from ..utils import is_missing
+from .resolver import _source_count
 
 logger = logging.getLogger(__name__)
 
+TOP_N = 10
+MIN_KEEP_COLUMNS = 3
+FALLBACK_FILL = 0.8
+RELEVANCE_STEP = 0.1
 
-_US_STATES_FULL = {
-    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
-    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
-    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
-    "maine", "maryland", "massachusetts", "michigan", "minnesota",
-    "mississippi", "missouri", "montana", "nebraska", "nevada",
-    "new hampshire", "new jersey", "new mexico", "new york", "north carolina",
-    "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
-    "rhode island", "south carolina", "south dakota", "tennessee", "texas",
-    "utah", "vermont", "virginia", "washington", "west virginia",
-    "wisconsin", "wyoming",
-}
-
-_US_STATES_ABBR = {
-    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id",
-    "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms",
-    "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok",
-    "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv",
-    "wi", "wy", "dc",
-}
-
-_LOCATION_CANON: dict[str, set[str]] = {
-    "us":             {"us", "usa", "u.s.", "u.s.a.", "united states",
-                       "united states of america", "america"},
-    "usa":            {"us", "usa", "u.s.", "u.s.a.", "united states",
-                       "united states of america", "america"},
-    "united states":  {"us", "usa", "u.s.", "u.s.a.", "united states",
-                       "united states of america", "america"},
-    "america":        {"us", "usa", "u.s.", "u.s.a.", "united states",
-                       "united states of america", "america"},
-    "uk":             {"uk", "u.k.", "united kingdom", "britain",
-                       "england", "scotland", "wales", "northern ireland"},
-    "united kingdom": {"uk", "u.k.", "united kingdom", "britain", "england"},
-    "eu":             {"eu", "europe", "european union"},
-    "europe":         {"eu", "europe", "european union"},
-    "canada":         {"canada", "canadian"},
-    "australia":      {"australia", "australian"},
-    "india":          {"india", "indian"},
-    "china":          {"china", "chinese"},
-    "germany":        {"germany", "german"},
-    "france":         {"france", "french"},
-    "singapore":      {"singapore"},
-    "israel":         {"israel", "israeli"},
-    "brazil":         {"brazil", "brazilian"},
-    "japan":          {"japan", "japanese"},
-    "south korea":    {"south korea", "korea", "korean"},
-    "netherlands":    {"netherlands", "dutch", "holland"},
-    "sweden":         {"sweden", "swedish"},
-}
-
-_GEO_COLUMN_KW = {
-    "country", "location", "headquarter", "hq", "based", "region",
-    "city", "state", "office", "address", "origin", "geography",
-}
-
-_NUMERIC_COLUMN_KW = {
-    "funding", "raised", "investment", "capital", "revenue", "arr",
-    "mrr", "valuation", "amount", "total", "employees", "headcount",
-    "price", "cost", "rating", "score", "year", "founded",
-}
-
-_TEXT_COLUMN_KW = {
-    "description", "type", "category", "tag", "label", "domain",
-    "industry", "sector", "model", "cuisine", "style", "focus",
-    "specialt", "product", "service", "feature", "about",
-}
-
-_UNIT_MULT: dict[str, float] = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
-
-_NUMERIC_RE = re.compile(
-    r"\$?\s*(?P<val>\d[\d,]*(?:\.\d+)?)\s*"
-    r"(?P<unit>[KkMmBb](?:illion|llion)?)?\b",
-)
+UNIT_MULT = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+NUMBER_PATTERN = re.compile(r"(?P<val>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>[KkMmBb](?:illion)?)?\b")
 
 
-def _parse_amount(val_str: str, unit_str: str) -> float:
-    val = float(val_str.replace(",", ""))
-    if unit_str:
-        val *= _UNIT_MULT.get(unit_str[0].lower(), 1.0)
-    return val
+def _text(entity: Entity, column: str) -> str:
+    cell = entity.cells.get(column)
+    if cell is None or is_missing(cell.value):
+        return ""
+    return str(cell.value)
 
 
-def _cell_to_number(value: Any) -> float | None:
-    if value is None:
+def _has_phrase(text: str, phrase: str) -> bool:
+    phrase = phrase.strip().lower()
+    return bool(phrase) and re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text.lower()) is not None
+
+
+def _to_number(value: Any) -> float | None:
+    text = str(value).strip()
+    if not text:
         return None
-    s = str(value)
-    results: list[float] = []
-    for val_str, unit_str in _NUMERIC_RE.findall(s):
-        try:
-            results.append(_parse_amount(val_str, unit_str))
-        except ValueError:
-            pass
-    return max(results) if results else None
+    if re.fullmatch(r"\$+", text):
+        return float(len(text))
+    numbers = []
+    for match in NUMBER_PATTERN.finditer(text):
+        number = float(match.group("val").replace(",", ""))
+        unit = match.group("unit")
+        if unit:
+            number *= UNIT_MULT[unit[0].lower()]
+        numbers.append(number)
+    return max(numbers) if numbers else None
 
 
-def _op_passes(actual: float, op: str, threshold: float) -> bool:
-    op = op.strip().lower()
-    if op in (">", "gt", "above", "over", "more than", "greater than"):
-        return actual > threshold
-    if op in ("<", "lt", "below", "under", "less than"):
-        return actual < threshold
-    if op in (">=", "ge", "at least", "min", "minimum", "no less than"):
-        return actual >= threshold
-    if op in ("<=", "le", "at most", "max", "maximum", "no more than"):
-        return actual <= threshold
-    if op in ("=", "==", "eq", "equal", "equals", "around", "about"):
-        return abs(actual - threshold) <= max(threshold * 0.05, 1)
-    return False
+def _passes(actual: float, op: str, limit: float) -> bool:
+    return {">": actual > limit, ">=": actual >= limit, "<": actual < limit, "<=": actual <= limit}.get(op, False)
 
 
-
-def _cols_for_hint(hint: str, columns: list[str], fallback_kw: set[str]) -> list[str]:
-    hint_words = set(re.split(r"[\s_\-]+", hint.lower()))
-    # Remove very generic words
-    hint_words -= {"the", "a", "an", "of", "in", "for", "and", "or"}
-
-    exact: list[str] = []
-    fuzzy: list[str] = []
-    for col in columns:
-        col_words = set(re.split(r"[\s_\-]+", col.lower()))
-        if hint_words & col_words:
-            exact.append(col)
-        elif any(kw in col.lower() for kw in fallback_kw):
-            fuzzy.append(col)
-
-    return exact or fuzzy or columns
+def _location_met(entity: Entity, rule: dict) -> bool:
+    text = _text(entity, rule["column"])
+    return any(_has_phrase(text, name) for name in rule["names"])
 
 
-_CONSTRAINT_SYSTEM = """\
-You extract structured search constraints from a user query.
-Constraints are things the results MUST satisfy.
-
-Respond with ONLY a valid JSON object - no markdown, no explanation:
-{
-  "location": "<place the entity must be based in - city, region or country - or null>",
-  "numeric": [
-    {
-      "field_hint": "<what the number describes, e.g. funding, revenue, employees, year, rating, price>",
-      "op": "<one of: >, <, >=, <=, =>",
-      "threshold": <number in full, no units, no $>
-    }
-  ],
-  "categorical": [
-    {
-      "field_hint": "<which aspect - e.g. type, cuisine, industry, domain, technology>",
-      "keywords": ["<primary keyword>", "<synonym 1>", "<synonym 2>"]
-    }
-  ]
-}
-
-Rules:
-- "location": keep as stated ("Brooklyn", "US", "Europe", "India"). null if not mentioned.
-- "numeric": use for ALL numeric comparisons, including years ("2024" → year >= 2024),
-  prices, ratings, counts, and funding amounts.
-- "categorical": use for required categories, tags, technologies, or descriptors.
-  Always include common synonyms / alternate spellings in "keywords".
-- Extract ONLY mandatory constraints. Ignore vague words like "top", "best", "good"
-  unless they imply a concrete threshold.
-
-Examples:
-  "search engine startups in the US with funding > 10M"
-  → {"location": "US",
-     "numeric": [{"field_hint": "funding", "op": ">", "threshold": 10000000}],
-     "categorical": []}
-
-  "pizza places in Brooklyn"
-  → {"location": "Brooklyn, NY",
-     "numeric": [],
-     "categorical": [{"field_hint": "cuisine", "keywords": ["pizza", "pizzeria", "italian"]}]}
-
-  "open source database tools"
-  → {"location": null,
-     "numeric": [],
-     "categorical": [{"field_hint": "type", "keywords": ["open source", "open-source", "oss"]}]}
-
-  "no-code app building tools"
-  → {"location": null,
-     "numeric": [],
-     "categorical": [{"field_hint": "type", "keywords": ["no-code", "no code", "low-code", "nocode"]}]}
-
-  "AI startups in healthcare"
-  → {"location": null,
-     "numeric": [],
-     "categorical": [
-       {"field_hint": "industry", "keywords": ["healthcare", "health", "medical", "clinical", "biotech"]},
-       {"field_hint": "technology", "keywords": ["AI", "artificial intelligence", "machine learning", "ML"]}
-     ]}
-
-  "large language model providers"
-  → {"location": null,
-     "numeric": [],
-     "categorical": [{"field_hint": "domain",
-                       "keywords": ["large language model", "LLM", "language model",
-                                    "foundation model", "generative AI"]}]}
-
-  "autonomous vehicle companies 2024"
-  → {"location": null,
-     "numeric": [{"field_hint": "founded_year", "op": ">=", "threshold": 2020}],
-     "categorical": [{"field_hint": "domain",
-                       "keywords": ["autonomous vehicle", "self-driving", "AV",
-                                    "autonomous driving", "robotaxi"]}]}
-
-  "restaurants with rating above 4.5 in Chicago"
-  → {"location": "Chicago",
-     "numeric": [{"field_hint": "rating", "op": ">", "threshold": 4.5}],
-     "categorical": []}
-
-  "B2B SaaS companies in Europe with ARR > 5M"
-  → {"location": "Europe",
-     "numeric": [{"field_hint": "arr", "op": ">", "threshold": 5000000}],
-     "categorical": [
-       {"field_hint": "model", "keywords": ["B2B", "business to business"]},
-       {"field_hint": "type",  "keywords": ["SaaS", "software as a service"]}
-     ]}
-"""
+def _numeric_met(entity: Entity, rule: dict) -> bool:
+    actual = _to_number(_text(entity, rule["column"]))
+    return actual is not None and _passes(actual, rule["op"], rule["value"])
 
 
-async def _extract_constraints_llm(client: AsyncOpenAI, query: str) -> dict:
+def _categorical_met(entity: Entity, rule: dict) -> bool:
+    row = " ".join(_text(entity, col) for col in entity.cells)
+    return any(_has_phrase(row, kw) for kw in rule["keywords"])
+
+
+def _checks(rules: dict) -> list[tuple[str, Any, dict]]:
+    checks = []
+    if rules.get("location"):
+        rule = rules["location"]
+        checks.append((f"In {rule['names'][0]}", _location_met, rule))
+    for rule in rules.get("numeric", []):
+        value = int(rule["value"]) if float(rule["value"]).is_integer() else rule["value"]
+        checks.append((f"{rule['column'].replace('_', ' ')} {rule['op']} {value}", _numeric_met, rule))
+    for rule in rules.get("categorical", []):
+        checks.append((f"{rule['column'].replace('_', ' ')}: {rule['keywords'][0]}", _categorical_met, rule))
+    return checks
+
+
+def _rule_columns(rules: dict) -> set[str]:
+    columns = {rule["column"] for rule in rules.get("numeric", []) + rules.get("categorical", [])}
+    if rules.get("location"):
+        columns.add(rules["location"]["column"])
+    return columns
+
+
+def _relevance(entities: list[Entity], columns: list[str], query: str, model) -> list[float]:
+    if model is None or not entities:
+        return [0.0] * len(entities)
     try:
-        resp = await client.chat.completions.create(
-            model=RANKER_MODEL,
-            messages=[
-                {"role": "system", "content": _CONSTRAINT_SYSTEM},
-                {"role": "user", "content": query},
-            ],
-            max_tokens=1024,
-            reasoning_effort=LLM_REASONING,
-            temperature=0,
-        )
-        text = (resp.choices[0].message.content or "").strip()
-        parsed = extract_json_obj(text)
-        if parsed and isinstance(parsed, dict):
-            return parsed
+        rows = [" | ".join(_text(e, col) for col in columns if _text(e, col)) for e in entities]
+        row_vecs = np.asarray(list(model.embed(rows)), dtype="float32")
+        query_vec = np.asarray(list(model.query_embed([query])), dtype="float32")[0]
+        row_vecs /= np.linalg.norm(row_vecs, axis=1, keepdims=True) + 1e-9
+        query_vec /= np.linalg.norm(query_vec) + 1e-9
+        return [float(s) for s in row_vecs @ query_vec]
     except Exception as exc:
-        logger.warning("LLM constraint extraction failed: %s", exc)
-    return {}
+        logger.warning("Relevance scoring failed: %s", exc)
+        return [0.0] * len(entities)
 
 
-def _location_satisfied(entity: Entity, columns: list[str], loc_key: str) -> bool:
-    loc_lower = loc_key.lower().strip()
-    canon = _LOCATION_CANON.get(loc_lower)
-    is_us_query = loc_lower in _LOCATION_CANON and "united states" in _LOCATION_CANON.get(loc_lower, set())
-
-    geo_cols = [c for c in columns if any(kw in c.lower() for kw in _GEO_COLUMN_KW)] or columns
-
-    for col in geo_cols:
-        cell = entity.cells.get(col)
-        if not cell or cell.value is None:
-            continue
-        text = str(cell.value).lower()
-
-        # 1. Canonical identifier match
-        if canon and any(ident in text for ident in canon):
-            return True
-
-        # 2. US state names / abbreviations (implicit US indicator)
-        if is_us_query:
-            if any(state in text for state in _US_STATES_FULL):
-                return True
-            parts = [p.strip().rstrip(".") for p in re.split(r"[,/]", text)]
-            if any(p in _US_STATES_ABBR for p in parts):
-                return True
-
-        # 3. Generic phrase match (covers cities, neighbourhoods, sub-regions)
-        if loc_lower in text:
-            return True
-
-    return False
+def _fullness(entity: Entity, columns: list[str]) -> int:
+    return sum(1 for col in columns if _text(entity, col))
 
 
-def _numeric_satisfied(entity: Entity, columns: list[str], nc: dict) -> bool:
-    field_hint = nc.get("field_hint", "")
-    op = nc.get("op", ">")
-    threshold = float(nc.get("threshold", 0))
-
-    target_cols = _cols_for_hint(field_hint, columns, _NUMERIC_COLUMN_KW)
-
-    for col in target_cols:
-        cell = entity.cells.get(col)
-        if not cell or cell.value is None:
-            continue
-        actual = _cell_to_number(cell.value)
-        if actual is not None and _op_passes(actual, op, threshold):
-            return True
-    return False
+def pick_columns(entities: list[Entity], columns: list[str], keep: set[str]) -> list[str]:
+    if not entities:
+        return columns
+    fill = {col: sum(1 for e in entities if _text(e, col)) / len(entities) for col in columns}
+    chosen = {col for col in columns if col == "name" or col in keep or fill[col] == 1.0}
+    if len(chosen - {"name"}) < MIN_KEEP_COLUMNS:
+        chosen |= {col for col in columns if fill[col] >= FALLBACK_FILL}
+    return [col for col in columns if col in chosen]
 
 
-def _categorical_satisfied(entity: Entity, columns: list[str], cc: dict) -> bool:
-    field_hint = cc.get("field_hint", "")
-    keywords: list[str] = [kw.lower() for kw in cc.get("keywords", []) if kw]
-
-    if not keywords:
-        return False
-
-    target_cols = _cols_for_hint(field_hint, columns, _TEXT_COLUMN_KW)
-
-    for col in target_cols:
-        cell = entity.cells.get(col)
-        if not cell or cell.value is None:
-            continue
-        text = str(cell.value).lower()
-        if any(kw in text for kw in keywords):
-            return True
-
-    return False
-
-
-
-def _score_entity(entity: Entity, constraints: dict, columns: list[str]) -> int:
-    n = 0
-
-    location = constraints.get("location")
-    if location:
-        if _location_satisfied(entity, columns, location):
-            n += 1
-
-    for nc in constraints.get("numeric", []):
-        if _numeric_satisfied(entity, columns, nc):
-            n += 1
-
-    for cc in constraints.get("categorical", []):
-        if _categorical_satisfied(entity, columns, cc):
-            n += 1
-
-    return n
-
-
-
-def _fmt_threshold(val: float) -> str:
-    if val >= 1_000_000_000:
-        return f"${val / 1_000_000_000:.4g}B"
-    if val >= 1_000_000:
-        return f"${val / 1_000_000:.4g}M"
-    if val >= 1_000:
-        return f"${val / 1_000:.4g}K"
-    
-    if val == int(val):
-        return str(int(val))
-    return f"{val:.4g}"
-
-
-def _build_labels(constraints: dict) -> list[str]:
-    labels: list[str] = []
-
-    location = constraints.get("location")
-    if location:
-        labels.append(f"Based in {location}")
-
-    for nc in constraints.get("numeric", []):
-        field = nc.get("field_hint", "value").replace("_", " ").title()
-        op    = nc.get("op", ">")
-        thr   = _fmt_threshold(float(nc.get("threshold", 0)))
-        labels.append(f"{field} {op} {thr}")
-
-    for cc in constraints.get("categorical", []):
-        field    = cc.get("field_hint", "type").replace("_", " ").title()
-        keywords = cc.get("keywords", [])
-        primary  = keywords[0] if keywords else "?"
-        labels.append(f"{field}: {primary}")
-
-    return labels
-
-
-
-def rank_entities(
+def rank(
     entities: list[Entity],
-    constraints: dict,
-    columns: list[str],
-) -> tuple[list[Entity], RankingInfo]:
-    labels = _build_labels(constraints)
-    total  = len(labels)
-
-    has_location   = bool(constraints.get("location"))
-    has_numeric    = bool(constraints.get("numeric"))
-    has_categorical = bool(constraints.get("categorical"))
-
-    if not (has_location or has_numeric or has_categorical):
-        # No constraints - preserve order, return empty ranking info
-        scores = {e.id: 0 for e in entities}
-        return entities, RankingInfo(total=0, labels=[], scores=scores)
-
-    scored: list[tuple[Entity, int, float]] = []
-    for entity in entities:
-        n_sat = _score_entity(entity, constraints, columns)
-        cov   = entity.coverage(columns)
-        scored.append((entity, n_sat, cov))
-
-    scored.sort(key=lambda x: (x[1], x[2]), reverse=True)
-
-    if logger.isEnabledFor(logging.INFO):
-        for entity, n_sat, cov in scored:
-            logger.info(
-                "  [rank] %-40s  satisfied=%d/%d  coverage=%.2f",
-                entity.get_name(), n_sat, total, cov,
-            )
-
-    ranked  = [x[0] for x in scored]
-    scores  = {x[0].id: x[1] for x in scored}
-    return ranked, RankingInfo(total=total, labels=labels, scores=scores)
-
-
-async def extract_and_rank(
-    client: AsyncOpenAI,
-    entities: list[Entity],
+    rules: dict,
     columns: list[str],
     query: str,
-) -> tuple[list[Entity], RankingInfo]:
+    model=None,
+) -> tuple[list[Entity], list[str], RankingInfo]:
+    rules = rules or {}
+    checks = _checks(rules)
+    labels = [label for label, _, _ in checks]
     if not entities:
-        return entities, RankingInfo(total=0, labels=[], scores={})
+        return [], columns, RankingInfo(total=len(checks), labels=labels, scores={})
 
-    constraints = await _extract_constraints_llm(client, query)
-    logger.info("Ranking constraints extracted: %s", constraints)
+    met = [sum(1 for _, check, rule in checks if check(e, rule)) for e in entities]
+    relevance = _relevance(entities, columns, query, model)
+    order = sorted(
+        range(len(entities)),
+        key=lambda i: (
+            met[i],
+            round(relevance[i] / RELEVANCE_STEP),
+            _source_count(entities[i]),
+            _fullness(entities[i], columns),
+        ),
+        reverse=True,
+    )[:TOP_N]
+    top = [entities[i] for i in order]
+    shown = pick_columns(top, columns, _rule_columns(rules))
 
-    return rank_entities(entities, constraints, columns)
+    for i in order:
+        logger.info("[rank] %-35s met=%d/%d relevance=%.2f sources=%d",
+                    entities[i].get_name(), met[i], len(checks), relevance[i], _source_count(entities[i]))
+    logger.info("Columns shown: %s, dropped: %s", shown, [c for c in columns if c not in shown])
+    return top, shown, RankingInfo(total=len(checks), labels=labels, scores={entities[i].id: met[i] for i in order})
