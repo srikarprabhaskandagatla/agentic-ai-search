@@ -52,36 +52,79 @@ async def test_planner_name_always_first(): # Name column should always be first
     assert plan.columns[0] == "name"
 
 
-# Scraper 
+LONG_TEXT = "Hippocratic AI, a Palo Alto startup building a safety-focused LLM for healthcare, was founded in 2023."
+
+
+def test_retriever_prefers_raw_content():
+    from backend.pipeline.retriever import _to_page
+
+    page = _to_page({"url": "https://a.com", "title": "A", "raw_content": LONG_TEXT, "content": "short snippet"})
+    assert page.content == LONG_TEXT
+
+
+def test_retriever_falls_back_to_snippet():
+    from backend.pipeline.retriever import _to_page
+
+    page = _to_page({"url": "https://a.com", "title": "A", "raw_content": None, "content": LONG_TEXT})
+    assert page.content == LONG_TEXT
+
+
+def test_retriever_skips_empty_pages():
+    from backend.pipeline.retriever import _to_page
+
+    assert _to_page({"url": "https://a.com", "raw_content": "", "content": "too short"}) is None
+    assert _to_page({"url": "", "raw_content": LONG_TEXT}) is None
+
+
+def test_retriever_cuts_long_pages():
+    from backend.pipeline.retriever import _to_page, MAX_CONTENT_CHARS
+
+    page = _to_page({"url": "https://a.com", "raw_content": "x" * (MAX_CONTENT_CHARS * 2)})
+    assert len(page.content) == MAX_CONTENT_CHARS
+
+
 @pytest.mark.asyncio
-async def test_scraper_skips_binary(): # Scraper should skip URLs with binary file extensions
-    from backend.pipeline.scraper import scrape_urls
+async def test_retriever_dedupes_and_skips_seen_urls():
+    from backend.pipeline import retriever
 
-    pages = await scrape_urls(["https://example.com/file.pdf"])
-    assert len(pages) == 0  # PDF should be skipped (no content)
+    def result(url):
+        return {"url": url, "title": url, "raw_content": LONG_TEXT}
+
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(side_effect=[
+        {"results": [result("https://a.com"), result("https://b.com")]},
+        {"results": [result("https://b.com"), result("https://c.com")]},
+    ])
+    with patch.object(retriever, "_client", return_value=mock_client):
+        pages = await retriever.retrieve(["q1", "q2"], seen_urls={"https://a.com"})
+
+    assert [p.url for p in pages] == ["https://b.com", "https://c.com"]
 
 
-def test_scraper_clean_html(): # HTML cleaner should extract text and remove boilerplate
-    from backend.pipeline.scraper import _clean_html
+@pytest.mark.asyncio
+async def test_retriever_survives_one_failed_query():
+    from backend.pipeline import retriever
 
-    html = """
-    <html><head><title>Test Page</title></head>
-    <body>
-      <nav>Nav menu here</nav>
-      <main>
-        <article>
-          <h1>Company Name</h1>
-          <p>This company was founded in 2020 and is headquartered in San Francisco.</p>
-          <p>They raised $50 million in Series B funding last year.</p>
-        </article>
-      </main>
-      <footer>Footer text here</footer>
-    </body></html>
-    """
-    title, content = _clean_html(html, "https://test.com")
-    assert title == "Test Page"
-    assert "founded in 2020" in content  # "Company Name" is <20 chars so filtered
-    assert "founded in 2020" in content
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(side_effect=[
+        RuntimeError("rate limited"),
+        {"results": [{"url": "https://a.com", "raw_content": LONG_TEXT}]},
+    ])
+    with patch.object(retriever, "_client", return_value=mock_client):
+        pages = await retriever.retrieve(["q1", "q2"], seen_urls=set())
+
+    assert [p.url for p in pages] == ["https://a.com"]
+
+
+@pytest.mark.asyncio
+async def test_retriever_raises_when_all_queries_fail():
+    from backend.pipeline import retriever
+
+    mock_client = AsyncMock()
+    mock_client.search = AsyncMock(side_effect=RuntimeError("bad key"))
+    with patch.object(retriever, "_client", return_value=mock_client):
+        with pytest.raises(RuntimeError):
+            await retriever.retrieve(["q1", "q2"], seen_urls=set())
 
 
 # Resolver
