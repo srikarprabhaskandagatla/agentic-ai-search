@@ -14,7 +14,6 @@ LLM_REASONING = "low"
 PLANNER_MODEL = "openai/gpt-oss-20b"
 EXTRACTOR_MODEL = "openai/gpt-oss-20b"
 FILLER_MODEL = "openai/gpt-oss-20b"
-RANKER_MODEL = "openai/gpt-oss-20b"
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
