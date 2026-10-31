@@ -7,7 +7,7 @@
 from __future__ import annotations
 import json, logging
 from openai import AsyncOpenAI
-from ..config import GAP_MODEL
+from ..config import LLM_REASONING, GAP_MODEL
 from ..models import Entity, CellValue
 from .utils import extract_json_obj
 
@@ -112,7 +112,8 @@ Generate per-entity queries to fill the missing attributes."""
                 {"role": "system", "content": GAP_ANALYZER_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=512,
+            max_tokens=1024,
+            reasoning_effort=LLM_REASONING,
         )
         text = response.choices[0].message.content.strip()
         result = extract_json_obj(text)
