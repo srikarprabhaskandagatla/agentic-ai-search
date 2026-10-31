@@ -4,6 +4,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from tavily import AsyncTavilyClient
 from ..models import ScrapedPage
+from ..utils import clean_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def _client() -> AsyncTavilyClient:
 
 def _to_page(item: dict) -> ScrapedPage | None:
     url = (item.get("url") or "").strip()
-    text = item.get("raw_content") or item.get("content") or ""
+    text = clean_markdown(item.get("raw_content") or item.get("content") or "")
     if not url or len(text) < MIN_CONTENT_CHARS:
         return None
     return ScrapedPage(url=url, title=item.get("title") or "", content=text[:MAX_CONTENT_CHARS])
