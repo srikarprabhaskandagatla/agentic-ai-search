@@ -344,6 +344,118 @@ def test_fast_dedup_merges_same_names(): # Fast dedup should merge entities with
     assert "Anthropic" in names
 
 
+def _entity(name, url="https://p1.com", **cols):
+    from backend.models import Entity, CellValue, SourceRef
+    import uuid
+    cells = {"name": CellValue(value=name, sources=[SourceRef(url=url)])}
+    for col, val in cols.items():
+        cells[col] = CellValue(value=val, sources=[SourceRef(url=url)])
+    return Entity(id=str(uuid.uuid4()), cells=cells)
+
+
+def _topic_pages():
+    from backend.models import ScrapedPage
+    filler = "\n".join(f"Healthcare AI startup number {i} is building health tools for hospitals." for i in range(20))
+    return [ScrapedPage(url="https://list.com", content=filler + "\nHippocratic AI builds safety focused models for nurses.")]
+
+
+def test_normalise_name_handles_the_and_ampersand():
+    from backend.pipeline.resolver import _normalise_name
+
+    assert _normalise_name("The Hippocratic AI, Inc.") == "hippocratic ai"
+    assert _normalise_name("Johnson & Johnson") == "johnson and johnson"
+    assert _normalise_name("Co") == "co"
+
+
+def test_resolver_merges_spacing_variants():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities([_entity("OpenAI"), _entity("Open AI", "https://p2.com")], [], "")
+    assert len(out) == 1
+
+
+def test_resolver_merges_names_sharing_a_rare_word():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Hippocratic AI"), _entity("Hippocratic", "https://p2.com")],
+        _topic_pages(), "AI healthcare startups",
+    )
+    assert len(out) == 1
+
+
+def test_resolver_keeps_names_sharing_only_a_topic_word():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Bayesian Health"), _entity("Health Inc", "https://p2.com")],
+        _topic_pages(), "AI healthcare startups",
+    )
+    assert len(out) == 2
+
+
+def test_resolver_different_domains_block_merge():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Acme Health", website="acme.com"), _entity("Acme Healths", "https://p2.com", website="https://acmehealth.io")],
+        [], "",
+    )
+    assert len(out) == 2
+
+
+def test_resolver_same_domain_merges_longer_name():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Stripe", website="stripe.com"), _entity("Stripe Payments", "https://p2.com", website="https://www.stripe.com/")],
+        [], "",
+    )
+    assert len(out) == 1
+
+
+def test_resolver_merge_is_transitive():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Hippocratic AI", website="hippocratic.ai"), _entity("Hippocratic", "https://p2.com"),
+         _entity("Hipocratic", "https://p3.com")],
+        _topic_pages(), "AI healthcare startups",
+    )
+    assert len(out) == 1
+
+
+def test_resolver_cites_only_sources_that_agree():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Alpha", "https://p1.com", founded="2019"), _entity("Alpha", "https://p2.com", founded="2019"),
+         _entity("Alpha", "https://p3.com", founded="2020")],
+        [], "",
+    )
+    cell = out[0].cells["founded"]
+    assert cell.value == "2019"
+    assert {src.url for src in cell.sources} == {"https://p1.com", "https://p2.com"}
+
+
+def test_resolver_orders_by_source_count_not_alphabet():
+    from backend.pipeline.resolver import resolve_entities
+
+    out = resolve_entities(
+        [_entity("Alpha"), _entity("Zebra", "https://p1.com"), _entity("Zebra", "https://p2.com")],
+        [], "",
+    )
+    assert [e.get_name() for e in out] == ["Zebra", "Alpha"]
+
+
+def test_resolver_keeps_more_than_ten():
+    from backend.pipeline.resolver import resolve_entities
+
+    names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima"]
+    out = resolve_entities([_entity(n) for n in names], [], "")
+    assert len(out) == 12
+
+
 # Gap Analyser
 def test_coverage_computation(): # Coverage should be 0 when no entities have a value for a column
     from backend.pipeline.gap_analyzer import _compute_coverage
