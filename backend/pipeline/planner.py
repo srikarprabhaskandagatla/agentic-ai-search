@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from openai import AsyncOpenAI
-from ..config import PLANNER_MODEL
+from ..config import LLM_REASONING, PLANNER_MODEL
 from ..models import SearchPlan
 from .utils import extract_json_obj
 
@@ -40,6 +40,7 @@ async def plan_search(client: AsyncOpenAI, query: str) -> SearchPlan:
             {"role": "user", "content": f"Plan a structured search for: {query}"},
         ],
         max_tokens=1024,
+        reasoning_effort=LLM_REASONING,
         temperature=0.3,
     )
 
