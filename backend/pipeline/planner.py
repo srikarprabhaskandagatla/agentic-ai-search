@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 MAX_COLUMNS = 8
 OUTPUT_TOKENS = 1024
 NUM_QUERIES = 3
+VALID_OPS = {">", ">=", "<", "<="}
 LOOKUP_COLUMNS = {
     "phone", "phone_number", "telephone", "address", "street_address", "email",
     "contact", "hours", "opening_hours", "business_hours", "fax",
@@ -64,11 +65,27 @@ Given a topic query you must:
    pages naming many of these entities. Put the best query first.
    Only add a year to a query if it is the current year given by the user.
 
+4. Turn the real filters in the query into ranking rules. Use your EXACT column names.
+   - "location": {"column": "...", "names": ["place", "nickname", ...]} or null
+   - "numeric": [{"column": "...", "op": ">", ">=", "<" or "<=", "value": number}]
+   - "categorical": [{"column": "...", "keywords": ["word", "synonym", ...]}]
+   Ignore words that are not filters, like "best", "top" or "popular".
+   Examples:
+     "cheap pizza places in Brooklyn"
+       -> {"location": {"column": "neighborhood", "names": ["Brooklyn", "BK"]},
+           "numeric": [{"column": "price_range", "op": "<=", "value": 2}],
+           "categorical": [{"column": "pizza_style", "keywords": ["pizza", "pizzeria"]}]}
+     "AI startups in healthcare founded after 2020"
+       -> {"location": null,
+           "numeric": [{"column": "founded_year", "op": ">", "value": 2020}],
+           "categorical": [{"column": "focus_area", "keywords": ["health", "healthcare", "medical", "clinical"]}]}
+
 Respond with ONLY a JSON object:
 {
   "entity_type": "short description",
   "columns": ["name", "...", "highlights"],
   "search_queries": ["query1", "query2", "query3"],
+  "rules": {"location": null, "numeric": [], "categorical": []},
   "rationale": "one sentence"
 }"""
 
@@ -93,6 +110,41 @@ def _clean_queries(queries: list, query: str) -> list[str]:
         if q and q.lower() not in {c.lower() for c in cleaned}:
             cleaned.append(q)
     return cleaned[:NUM_QUERIES]
+
+
+def _words(values) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(v).strip() for v in values if str(v).strip()]
+
+
+def _clean_rules(rules, columns: list[str]) -> dict:
+    clean = {"location": None, "numeric": [], "categorical": []}
+    if not isinstance(rules, dict):
+        return clean
+
+    location = rules.get("location")
+    if isinstance(location, dict) and _snake(location.get("column", "")) in columns and _words(location.get("names")):
+        clean["location"] = {"column": _snake(location["column"]), "names": _words(location["names"])}
+
+    for rule in rules.get("numeric") or []:
+        if not isinstance(rule, dict) or _snake(rule.get("column", "")) not in columns:
+            continue
+        if rule.get("op") not in VALID_OPS:
+            continue
+        try:
+            value = float(rule.get("value"))
+        except (TypeError, ValueError):
+            continue
+        clean["numeric"].append({"column": _snake(rule["column"]), "op": rule["op"], "value": value})
+
+    for rule in rules.get("categorical") or []:
+        if not isinstance(rule, dict) or _snake(rule.get("column", "")) not in columns:
+            continue
+        if _words(rule.get("keywords")):
+            clean["categorical"].append({"column": _snake(rule["column"]), "keywords": _words(rule["keywords"])})
+
+    return clean
 
 
 def _fallback_plan(query: str) -> SearchPlan:
@@ -130,6 +182,7 @@ async def plan_search(client: AsyncOpenAI, query: str) -> SearchPlan:
             entity_type=str(data.get("entity_type") or query),
             columns=columns,
             search_queries=_clean_queries(data.get("search_queries", []), query),
+            rules=_clean_rules(data.get("rules"), columns),
             rationale=str(data.get("rationale", "")),
         )
     except Exception as exc:
