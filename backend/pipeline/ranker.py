@@ -4,7 +4,7 @@ import re, logging
 from typing import Any
 
 from openai import AsyncOpenAI
-from ..config import RANKER_MODEL
+from ..config import LLM_REASONING, RANKER_MODEL
 
 from ..models import Entity, RankingInfo
 from .utils import extract_json_obj
@@ -237,7 +237,8 @@ async def _extract_constraints_llm(client: AsyncOpenAI, query: str) -> dict:
                 {"role": "system", "content": _CONSTRAINT_SYSTEM},
                 {"role": "user", "content": query},
             ],
-            max_tokens=512,
+            max_tokens=1024,
+            reasoning_effort=LLM_REASONING,
             temperature=0,
         )
         text = (resp.choices[0].message.content or "").strip()
