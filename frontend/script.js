@@ -119,7 +119,7 @@ async function startSearch() {
   setBusy(true);
 
   try {
-    const resp = await fetch(`${apiBase()}/api/search`, {
+    const resp = await fetch(`${apiBase()}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, search_depth: depth }),
@@ -302,7 +302,7 @@ function renderExamples(list) {
 async function loadExamples() {
   renderExamples(FALLBACK_EXAMPLES);
   try {
-    const r = await fetch(`${apiBase()}/api/example-queries`);
+    const r = await fetch(`${apiBase()}/example-queries`);
     const data = await r.json();
     if (Array.isArray(data.examples) && data.examples.length) renderExamples(data.examples);
   } catch (e) {}
