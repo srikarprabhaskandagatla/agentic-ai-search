@@ -5,51 +5,87 @@ import asyncio, json, pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Planner
-@pytest.mark.asyncio
-async def test_planner_parse(): # Planner should parse valid JSON from Claude into a SearchPlan
-    from backend.pipeline.planner import plan_search
-    from backend.models import SearchPlan
-
-    mock_choice = MagicMock()
-    mock_choice.message.content = json.dumps({
-        "entity_type": "AI healthcare startups",
-        "columns": ["name", "description", "founded_year", "headquarters"],
-        "search_queries": ["AI healthcare startups 2024", "top health AI companies"],
-        "rationale": "Standard company attributes",
-    })
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
-
+def _planner_client(payload):
     mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    mock_client.chat.completions.create = AsyncMock(return_value=_llm_reply(payload))
+    return mock_client
 
-    plan = await plan_search(mock_client, "AI startups in healthcare")
+
+@pytest.mark.asyncio
+async def test_planner_parse():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({
+        "entity_type": "AI healthcare startups",
+        "columns": ["name", "focus_area", "key_product", "funding", "headquarters", "highlights"],
+        "search_queries": ["top AI healthcare startups", "healthcare AI companies list", "best health AI startups"],
+        "rationale": "Topic attributes",
+    })
+    plan = await plan_search(client, "AI startups in healthcare")
 
     assert plan.entity_type == "AI healthcare startups"
-    assert plan.columns[0] == "name"
-    assert len(plan.columns) == 4
-    assert len(plan.search_queries) == 2
+    assert plan.columns == ["name", "focus_area", "key_product", "funding", "headquarters", "highlights"]
+    assert len(plan.search_queries) == 3
 
 
 @pytest.mark.asyncio
-async def test_planner_name_always_first(): # Name column should always be first, even if model puts it elsewhere
+async def test_planner_name_always_first():
     from backend.pipeline.planner import plan_search
 
-    mock_choice = MagicMock()
-    mock_choice.message.content = json.dumps({
-        "entity_type": "pizza restaurants",
-        "columns": ["rating", "name", "address", "price_range"],
-        "search_queries": ["top pizza brooklyn"],
-        "rationale": "Test",
-    })
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
+    client = _planner_client({"entity_type": "pizza", "columns": ["pizza_style", "Name", "neighborhood"], "search_queries": ["q"]})
+    plan = await plan_search(client, "pizza places Brooklyn")
+    assert plan.columns == ["name", "pizza_style", "neighborhood"]
 
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    plan = await plan_search(mock_client, "pizza places Brooklyn")
+@pytest.mark.asyncio
+async def test_planner_drops_lookup_columns_and_cleans_names():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({"entity_type": "pizza", "search_queries": ["q"],
+                              "columns": ["name", "Pizza Style", "phone", "Address", "opening_hours", "price range", "pizza_style"]})
+    plan = await plan_search(client, "pizza places Brooklyn")
+    assert plan.columns == ["name", "pizza_style", "price_range"]
+
+
+@pytest.mark.asyncio
+async def test_planner_caps_columns_at_eight():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({"entity_type": "x", "search_queries": ["q"], "columns": ["name"] + [f"col_{i}" for i in range(12)]})
+    plan = await plan_search(client, "anything")
+    assert len(plan.columns) == 8
+
+
+@pytest.mark.asyncio
+async def test_planner_pads_queries_to_three_without_repeats():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({"entity_type": "x", "columns": ["name", "a", "b"], "search_queries": ["pizza Brooklyn"]})
+    plan = await plan_search(client, "pizza Brooklyn")
+    assert plan.search_queries == ["pizza Brooklyn", "top pizza Brooklyn", "best pizza Brooklyn"]
+
+
+@pytest.mark.asyncio
+async def test_planner_falls_back_on_api_failure():
+    from backend.pipeline.planner import plan_search
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError("429"))
+    plan = await plan_search(client, "pizza Brooklyn")
+
     assert plan.columns[0] == "name"
+    assert "highlights" in plan.columns
+    assert len(plan.search_queries) == 3
+    assert not any("2024" in q for q in plan.search_queries)
+
+
+@pytest.mark.asyncio
+async def test_planner_falls_back_when_too_few_columns():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({"entity_type": "x", "columns": ["name", "phone"], "search_queries": ["q"]})
+    plan = await plan_search(client, "pizza Brooklyn")
+    assert plan.rationale == "Fallback plan."
 
 
 LONG_TEXT = "Hippocratic AI, a Palo Alto startup building a safety-focused LLM for healthcare, was founded in 2023."
