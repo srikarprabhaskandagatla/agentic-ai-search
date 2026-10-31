@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio, json, logging, os
 from contextlib import asynccontextmanager
 
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MAX_RETRIES, LLM_PROVIDER, PLANNER_MODEL
 from backend.models import EntityTable
 from backend.pipeline import resolver, gap_analyzer
 from backend.pipeline.planner import plan_search
@@ -20,20 +21,17 @@ from backend.pipeline.extractor import extract_from_pages
 from backend.pipeline.llm_filler import llm_fill_gaps
 from backend.pipeline.ranker import extract_and_rank
 
-from dotenv import load_dotenv
-load_dotenv("backend/.env")
-
 # Logger Setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-cerebras_client: AsyncCerebras | None = None
+llm_client: AsyncOpenAI | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global cerebras_client
-    cerebras_client = AsyncCerebras(api_key=os.getenv("CEREBRAS_API_KEY", ""))
-    logger.info("Cerebras client configured")
+    global llm_client
+    llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY, max_retries=LLM_MAX_RETRIES)
+    logger.info("LLM client configured for %s", LLM_PROVIDER)
     yield
 
 
@@ -47,7 +45,7 @@ class SearchRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": app.version, "llm": "cerebras/qwen-3-235b-a22b-instruct-2507", "search": "tavily"}
+    return {"status": "ok", "version": app.version, "llm": f"{LLM_PROVIDER}/{PLANNER_MODEL}", "search": "tavily"}
 
 
 @app.get("/example-queries")
@@ -64,8 +62,8 @@ async def example_queries():
 
 @app.post("/search")
 async def search_endpoint(request: SearchRequest):
-    if cerebras_client is None:
-        raise HTTPException(status_code=503, detail="Cerebras client not configured")
+    if llm_client is None or not LLM_API_KEY:
+        raise HTTPException(status_code=503, detail="LLM client not configured")
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
@@ -88,7 +86,7 @@ async def search_endpoint(request: SearchRequest):
 
             # 1. Plan
             await send_progress("planning", "analysing query and inferring schema", 0.04)
-            plan = await plan_search(cerebras_client, request.query)
+            plan = await plan_search(llm_client, request.query)
             await send_progress("planning",
                        f"Schema: {len(plan.columns)} columns for '{plan.entity_type}'",
                        0.10, f"Columns: {', '.join(plan.columns)}")
@@ -114,21 +112,21 @@ async def search_endpoint(request: SearchRequest):
                     break
 
                 # 4. Extract
-                await send_progress("extracting", f"{rl}: Extracting entities with Qwen 3 235b", rp(0.45))
-                new_raw = await extract_from_pages(cerebras_client, pages, plan.columns, plan.entity_type)
+                await send_progress("extracting", f"{rl}: Extracting entities", rp(0.45))
+                new_raw = await extract_from_pages(llm_client, pages, plan.columns, plan.entity_type)
                 await send_progress("extracting", f"{rl}: Found {len(new_raw)} entity mentions", rp(0.65))
                 all_entities.extend(new_raw)
 
                 # 5. Resolve
                 await send_progress("resolving", f"{rl}: Deduplicating and merging", rp(0.70))
-                all_entities = await resolver.resolve_entities(cerebras_client, all_entities)
+                all_entities = await resolver.resolve_entities(llm_client, all_entities)
                 await send_progress("resolving", f"{rl}: {len(all_entities)} unique entities", rp(0.80))
 
                 # 6. Gap Analysis
                 if round_idx < request.search_depth - 1:
                     await send_progress("analyzing", "Checking data coverage", rp(0.88))
                     gap = await gap_analyzer.analyze_gaps(
-                        cerebras_client, all_entities, plan.columns,
+                        llm_client, all_entities, plan.columns,
                         request.query, plan.entity_type
                     )
                     if gap.get("should_continue") and gap.get("gap_queries"):
@@ -143,14 +141,14 @@ async def search_endpoint(request: SearchRequest):
             # 7. LLM gap-fill - last-resort pass for still-missing values
             await send_progress("filling", "Filling remaining gaps from LLM knowledge", 0.95)
             all_entities = await llm_fill_gaps(
-                cerebras_client, all_entities, plan.columns, plan.entity_type
+                llm_client, all_entities, plan.columns, plan.entity_type
             )
 
             # 8. Constraint-based ranking - mandatory: constraint-satisfying
             #    entities always surface to the top regardless of order.
             await send_progress("ranking", "Ranking results by query constraints", 0.98)
             all_entities, ranking_info = await extract_and_rank(
-                cerebras_client, all_entities, plan.columns, request.query
+                llm_client, all_entities, plan.columns, request.query
             )
 
             await send_progress("done",
