@@ -1,6 +1,33 @@
 from __future__ import annotations
 import json, re
 
+MISSING_VALUES = {
+    "", "unknown", "n/a", "na", "none", "null", "nil", "tbd", "-", "?",
+    "not specified", "not found", "not available", "not disclosed", "undisclosed",
+    "not mentioned", "not stated", "not provided", "not applicable", "no data",
+}
+IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+LINK_PATTERN = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def is_missing(value) -> bool:
+    return value is None or str(value).strip().strip(".").lower() in MISSING_VALUES
+
+
+def clean_markdown(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        line = IMAGE_PATTERN.sub(" ", line)
+        if LINK_PATTERN.search(line) and not LINK_PATTERN.sub("", line).strip(" -*|>#\t"):
+            continue
+        line = LINK_PATTERN.sub(r"\1", line)
+        line = re.sub(r"https?://\S+", " ", line)
+        line = re.sub(r"[#*_>`|]+", " ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
 
 def _strip_noise(text: str) -> str: # Strip <think> blocks and markdown code fences
     text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
