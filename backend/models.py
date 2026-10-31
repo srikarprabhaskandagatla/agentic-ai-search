@@ -46,17 +46,10 @@ class SearchPlan(BaseModel):
     rationale: str
 
 
-class SearchResult(BaseModel):
-    url: str
-    title: str = ""
-    snippet: str = ""
-
-
 class ScrapedPage(BaseModel):
     url: str
     title: str = ""
     content: str
-    error: Optional[str] = None
 
 
 # Ranking metadata attached to the final result
