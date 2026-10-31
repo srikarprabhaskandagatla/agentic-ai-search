@@ -4,7 +4,8 @@
 from __future__ import annotations
 import logging
 
-from cerebras.cloud.sdk import AsyncCerebras
+from openai import AsyncOpenAI
+from ..config import PLANNER_MODEL
 from ..models import SearchPlan
 from .utils import extract_json_obj
 
@@ -31,9 +32,9 @@ Example: {
 }"""
 
 
-async def plan_search(client: AsyncCerebras, query: str) -> SearchPlan:
+async def plan_search(client: AsyncOpenAI, query: str) -> SearchPlan:
     response = await client.chat.completions.create(
-        model="qwen-3-235b-a22b-instruct-2507",
+        model=PLANNER_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PLANNER_PROMPT},
             {"role": "user", "content": f"Plan a structured search for: {query}"},
