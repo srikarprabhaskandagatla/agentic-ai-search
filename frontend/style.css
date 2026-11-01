@@ -213,6 +213,7 @@ thead th {
 }
 td { padding: 8px 10px; border-top: 1px solid var(--border); vertical-align: top; min-width: 120px; }
 td.match, th.match { min-width: 0; width: 1%; white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
+td.rank, th.rank { min-width: 0; width: 1%; text-align: center; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 td.name { font-weight: 600; min-width: 150px; }
 tbody tr:hover { background: var(--surface-2); }
 tbody tr.detail:hover { background: transparent; }
