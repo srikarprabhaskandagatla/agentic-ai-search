@@ -142,12 +142,17 @@ def _build_prompt(entity_type: str, cells: list[Gap], chunks: dict[str, Chunk]) 
         {"id": i, "entity": gap.entity.get_name(), "column": gap.column, "chunks": gap.chunk_ids}
         for i, gap in enumerate(cells)
     ]
-    chunk_rows = [{"id": cid, "text": chunk.text} for cid, chunk in chunks.items()]
+    used = {cid for gap in cells for cid in gap.chunk_ids}
+    chunk_rows = [{"id": cid, "text": chunk.text} for cid, chunk in chunks.items() if cid in used]
     return (
         f"Entity type: {entity_type}\n\n"
-        f"CHUNKS:\n{json.dumps(chunk_rows, indent=1)}\n\n"
-        f"CELLS:\n{json.dumps(cell_rows, indent=1)}"
+        f"CHUNKS:\n{json.dumps(chunk_rows, ensure_ascii=False)}\n\n"
+        f"CELLS:\n{json.dumps(cell_rows, ensure_ascii=False)}"
     )
+
+
+def _call_tokens(user: str) -> int:
+    return estimate_tokens(FILLER_SYSTEM_PROMPT + user) + OUTPUT_TOKENS
 
 
 async def fill_from_chunks(
@@ -158,6 +163,7 @@ async def fill_from_chunks(
     index: ChunkIndex | None,
     token_budget: int = FILL_INPUT_TOKENS,
     sent: dict[tuple[str, str], set[int]] | None = None,
+    token_limit: int = TOKENS_PER_MINUTE,
 ) -> tuple[list[Entity], int]:
     gaps = find_gaps(entities, columns)
     if not gaps or index is None or not len(index):
@@ -171,13 +177,14 @@ async def fill_from_chunks(
         logger.info("Fill: no new chunk mentions any entity with gaps")
         return entities, 0
 
+    limit = min(token_limit, TOKENS_PER_MINUTE)
     user = _build_prompt(entity_type, cells, chunks)
-    while len(cells) > 1 and estimate_tokens(FILLER_SYSTEM_PROMPT + user) + OUTPUT_TOKENS > TOKENS_PER_MINUTE:
+    while len(cells) > 1 and _call_tokens(user) > limit:
         cells = cells[:-1]
         user = _build_prompt(entity_type, cells, chunks)
 
     try:
-        event = await pacer.reserve(estimate_tokens(FILLER_SYSTEM_PROMPT + user) + OUTPUT_TOKENS)
+        event = await pacer.reserve(_call_tokens(user))
         response = await client.chat.completions.create(
             model=FILLER_MODEL,
             messages=[
@@ -289,9 +296,10 @@ async def fill_loop(
             chunks, vectors = await asyncio.to_thread(embed_pages, pages)
             index.add(chunks, vectors)
 
-        budget = _fill_budget(max_fills == 1)
+        fast = max_fills == 1
+        limit = pacer.available() if fast else TOKENS_PER_MINUTE
         result.entities, filled = await fill_from_chunks(
-            client, result.entities, columns, entity_type, index, budget, sent,
+            client, result.entities, columns, entity_type, index, _fill_budget(fast), sent, limit,
         )
         result.filled += filled
         result.rounds = round_no
