@@ -184,7 +184,6 @@ function cellHtml(col, cell, entitySources) {
     const n = entitySources.findIndex(s => s.url === src.url) + 1;
     return `<button class="src" data-url="${esc(src.url)}" data-title="${esc(src.title || src.url)}" data-snippet="${esc(src.snippet || "")}" title="${esc(src.title || src.url)}" aria-label="Source ${n}">${n}</button>`;
   }).join("");
-  const star = cell.llm_filled ? `<span class="star" title="From the model's memory, not a web page">*</span>` : "";
   const cut = col !== "name" && val.length > TRUNCATE;
   const shown = cut
     ? `${esc(val.slice(0, TRUNCATE))}...<button class="more" data-col="${esc(label(col))}" data-val="${esc(val)}">more</button>`
@@ -192,7 +191,7 @@ function cellHtml(col, cell, entitySources) {
   return `<td class="${col === "name" ? "name" : ""}">
     <div class="cell">
       <span class="conf ${confLevel(conf)}" title="Confidence ${Math.round(conf * 100)}%"></span>
-      <span class="val">${star}${shown}</span>
+      <span class="val">${shown}</span>
       ${badges ? `<span class="srcs">${badges}</span>` : ""}
     </div>
   </td>`;
@@ -225,9 +224,7 @@ function renderResults(data) {
     return `<tr>${cells.join("")}</tr>`;
   }).join("");
 
-  const hasLlm = entities.some(e => Object.values(e.cells || {}).some(c => c.llm_filled));
-  $("sources-note").textContent = "Click a number to see the page and the quote behind a value." +
-    (hasLlm ? " Values with * come from the model's memory, not a web page." : "");
+  $("sources-note").textContent = "Click a number to see the page and the quote behind a value.";
 }
 
 function toggleDetail(btn) {
