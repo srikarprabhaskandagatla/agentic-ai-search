@@ -13,13 +13,6 @@ class CellValue(BaseModel):
     value: Any
     sources: list[SourceRef] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    llm_filled: bool = False  
-
-    @property
-    def display_value(self) -> str:
-        if self.value is None:
-            return ""
-        return str(self.value)
 
 
 class Entity(BaseModel):
@@ -29,11 +22,6 @@ class Entity(BaseModel):
     def get_name(self) -> str:
         cell = self.cells.get("name")
         return str(cell.value) if cell else self.id
-
-    def coverage(self, columns: list[str]) -> float:
-        """Fraction of columns that are filled."""
-        filled = sum(1 for c in columns if c in self.cells and self.cells[c].value is not None)
-        return filled / len(columns) if columns else 0.0
 
 
 class SearchPlan(BaseModel):
@@ -67,18 +55,3 @@ class EntityTable(BaseModel):
     rounds_completed: int
     ranking: Optional[RankingInfo] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
-    @property
-    def entity_count(self) -> int:
-        return len(self.entities)
-
-    @property
-    def source_count(self) -> int:
-        return len(self.sources_consulted)
-
-
-class ProgressUpdate(BaseModel):
-    stage: str       # planning | searching | scraping | extracting | resolving | analyzing | done
-    message: str
-    progress: float  # 0.0 to 1.0
-    detail: Optional[str] = None
