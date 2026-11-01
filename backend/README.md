@@ -70,7 +70,7 @@ client.chat.completions.create(
 )
 ```
 
-Before the call, the pacer reserves about 2,060 tokens (the prompt plus 1,024 for the answer). After the call, it records the real usage Groq reports.
+The system prompt is short, about 600 tokens, with one full example. Before the call, the pacer reserves about 1,650 tokens (the prompt plus 1,024 for the answer). After the call, it records the real usage Groq reports.
 
 ### What the LLM returns
 
@@ -84,9 +84,9 @@ dict(
         "affordable pizza slices Brooklyn",
     ],
     rules=dict(
-        location=dict(column="neighborhood", names=["Brooklyn", "BK", "Williamsburg", "DUMBO", "Park Slope", "Bushwick", "Carroll Gardens", "Greenpoint"]),
+        location=dict(column="neighborhood", names=["Williamsburg", "Brooklyn", "DUMBO", "Park Slope", "Bushwick", "Carroll Gardens", "Greenpoint"]),
         numeric=[dict(column="price_range", op="<=", value=2)],
-        categorical=[dict(column="pizza_style", keywords=["pizza", "pizzeria", "slice"])],
+        categorical=[],
     ),
     rationale="Compare style, price and area for cheap pizza in Brooklyn.",
 )
@@ -98,7 +98,9 @@ dict(
 |---|---|---|
 | Columns to snake case, `name` first, lookup columns removed, at most 8 | `_clean_columns` | `phone` is removed |
 | Exactly 3 queries, padded with the user query if needed | `_clean_queries` | the 3 queries stay |
-| Each rule must use a real column, a valid operator and a number | `_clean_rules` | all 3 rules stay, place names cut to 10 |
+| Each rule must use a real column, a valid operator and a number | `_clean_rules` | both rules stay |
+| The location must name a place from the query, and that place moves to the front | `_clean_rules` with `_in_query` | "Brooklyn" moves before "Williamsburg", names cut to 10 |
+| A categorical rule needs a keyword from the query | `_clean_rules` with `_in_query` | a made up style like "Neapolitan" would be dropped |
 
 If the call fails, or fewer than 3 columns are left, `_fallback_plan` returns a safe default plan.
 
@@ -441,11 +443,10 @@ Each rule becomes a label, a test function and the rule itself. The function is 
 checks = [
     ("In Brooklyn", _location_met, location_rule),
     ("price range <= 2", _numeric_met, price_rule),
-    (style_label, _categorical_met, style_rule),
 ]
 ```
 
-The categorical label is the column name followed by the first keyword, which shows as "pizza style" and "pizza" in one pill.
+This query has no categorical rule. "pizza" is the entity type, not a filter. A query like "cheap vegan pizza in Brooklyn" would add one, with the label made from the column name and the first keyword.
 
 | Test | How it works |
 |---|---|
@@ -457,15 +458,15 @@ An empty cell never passes.
 
 ### Score each row
 
-| Row | neighborhood | price | style | Met |
-|---|---|---|---|---|
-| Lucali | Carroll Gardens | $ | Thin crust pizza | 3/3 |
-| Joe's Pizza | Williamsburg | $ | New York slice | 3/3 |
-| L&B Spumoni Gardens | Gravesend | $ | Sicilian square pizza | 2/3 |
-| Juliana's | DUMBO | $$$ | Coal oven pizzeria | 2/3 |
-| Di Fara Pizza | Midwood | (empty) | Square slice | 1/3 |
+| Row | neighborhood | price | Met |
+|---|---|---|---|
+| Lucali | Carroll Gardens | $ | 2/2 |
+| Joe's Pizza | Williamsburg | $ | 2/2 |
+| L&B Spumoni Gardens | Gravesend | $ | 1/2 |
+| Juliana's | DUMBO | $$$ | 1/2 |
+| Di Fara Pizza | Midwood | (empty) | 0/2 |
 
-L&B misses the location rule because the planner did not list Gravesend. Di Fara has no price, which counts as not met.
+L&B misses the location rule because the planner did not list Gravesend. Juliana's is too pricey. Di Fara is in a place the planner did not list and has no price, which counts as not met. A row with 0 points is not removed. It only sorts lower.
 
 ### Sort
 
@@ -482,13 +483,20 @@ The top 10 are kept. One of the 11 places is cut.
 
 ### Pick columns (`pick_columns`)
 
-A column is shown if it is `name`, a rule uses it, or every top row has it filled. If fewer than 3 columns besides `name` are left, columns that are 80% filled are added back.
+Rules only sort the rows. Choosing columns is a separate step on the top 10 rows.
+
+1. A column that is empty in every row is never shown.
+2. `name` is always shown.
+3. A rule column is shown if at least one row has a value.
+4. Any other column is shown if every row has it filled.
+5. If fewer than 3 columns besides `name` are left, columns that are 80% filled are added back.
+6. If still fewer than 3, any column with data is added back.
 
 | Column | Filled | Shown | Why |
 |---|---|---|---|
 | name | 100% | yes | always |
 | neighborhood | 100% | yes | rule column |
-| pizza_style | 100% | yes | rule column |
+| pizza_style | 100% | yes | full |
 | signature_pie | 100% | yes | full |
 | price_range | 90% | yes | rule column |
 | highlights | 70% | no | not full and not a rule column |
@@ -499,9 +507,9 @@ A column is shown if it is `name`, a rule uses it, or every top row has it fille
 top, shown, info = rank(...)
 shown = ["name", "neighborhood", "pizza_style", "signature_pie", "price_range"]
 info = RankingInfo(
-    total=3,
-    labels=["In Brooklyn", "price range <= 2", style_label],
-    scores=dict(lucali_id=3, joes_id=3, lb_id=2, ...),
+    total=2,
+    labels=["In Brooklyn", "price range <= 2"],
+    scores=dict(lucali_id=2, joes_id=2, lb_id=1, ...),
 )
 ```
 
@@ -550,11 +558,13 @@ Tokens are guessed as characters divided by 3.5.
 
 | Call | Reserved before the call |
 |---|---|
-| Plan | about 2,060 |
+| Plan | about 1,650 |
 | Extract | about 5,900 |
 | Fill | up to about 5,700 |
 
-Plan and extract fit in one minute once the plan's real usage is recorded. A fill round may wait a few seconds for room. The filler also drops cells until a single prompt fits under the limit.
+Every call is under 7,900 by design, which means Groq never rejects a call for being too big. Plan and extract fit in one minute once the plan's real usage is recorded.
+
+In Fast mode the fill call is cut to fit the tokens left in the minute. The filler drops cells, and the chunks only those cells used, until the call fits. In a normal run Fast does not wait on the pacer. In Agentic mode a fill round may wait for room, and each call stays under the 7,900 limit.
 
 ---
 
@@ -568,13 +578,17 @@ The frontend shows 6 steps, Plan, Retrieve, Extract, Resolve, Fill and Rank. Eac
 
 | Match | name | neighborhood | pizza style | signature pie | price range |
 |---|---|---|---|---|---|
-| 3/3 | Lucali | Carroll Gardens | Thin crust pizza | Plain pie with fresh basil | $ |
-| 3/3 | Joe's Pizza | Williamsburg | New York slice | Cheese slice | $ |
-| 2/3 | L&B Spumoni Gardens | Gravesend | Sicilian square pizza | Sicilian square | $ |
-| 2/3 | Juliana's | DUMBO | Coal oven pizzeria | Margherita | $$$ |
-| 1/3 | Di Fara Pizza | Midwood | Square slice | Square slice | (empty) |
+| 2/2 | Lucali | Carroll Gardens | Thin crust pizza | Plain pie with fresh basil | $ |
+| 2/2 | Joe's Pizza | Williamsburg | New York slice | Cheese slice | $ |
+| 1/2 | L&B Spumoni Gardens | Gravesend | Sicilian square pizza | Sicilian square | $ |
+| 1/2 | Juliana's | DUMBO | Coal oven pizzeria | Margherita | $$$ |
+| 0/2 | Di Fara Pizza | Midwood | Square slice | Square slice | (empty) |
 
-Above the table, the rules show as pills next to "Ranked by". The Match badge is green at 3/3 and lighter as fewer rules are met.
+Above the table, the rules show as pills next to "Ranked by". The Match badge is green at 2/2 and lighter as fewer rules are met.
+
+### Empty results
+
+If no rows come back, a grey notice says there was not enough information and no table is shown. If rows come back with names only, the names are shown with the same notice above them. Both suggest a more specific query or Agentic mode.
 
 ### Source popup
 
