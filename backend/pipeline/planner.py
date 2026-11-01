@@ -19,77 +19,38 @@ LOOKUP_COLUMNS = {
     "contact", "hours", "opening_hours", "business_hours", "fax",
 }
 
-SYSTEM_PLANNER_PROMPT = """You plan a web search that will build a comparison table.
+SYSTEM_PLANNER_PROMPT = """You plan a web search that builds a comparison table.
 
-Given a topic query you must:
+1. entity_type, a few words, like "pizza restaurants".
 
-1. Name the entity type in a few words (e.g. "AI healthcare startups", "pizza restaurants").
+2. columns, 6 to 8 short snake_case names with "name" first and "highlights" last.
+   Pick facts that "best X" lists and reviews state for almost every entry, with short values.
+   Use a category or style column, the key measure or offering, and a location column if place matters.
+   If the query has a filter (a place, a price, a year), add a column that holds it.
+   Never use phone, address, hours, email, revenue, profit or employee count.
 
-2. Choose 7 or 8 columns. "name" is always the FIRST column.
-   Pick the attributes that articles, rankings and news about THIS topic use to
-   compare these entities. Ask yourself: "what does every 'best X' or 'top X'
-   article say about each one?"
+3. search_queries, exactly 3 different queries that find list, ranking or review pages naming
+   many entities. Best first. Add a year only if it is the current year.
 
-   Good columns are:
-   - a category or focus column with short values
-     (e.g. "pizza_style": "Neapolitan", "focus_area": "Clinical documentation")
-   - the topic's key measure or offering
-     (e.g. "autonomy_level", "key_product", "funding", "license")
-   - where it operates, if that matters for this topic
-     (e.g. "neighborhood", "primary_market")
-   - ONE short "highlights" column: why it stands out right now
-     (awards, recent milestones, what reviewers praise)
+4. rules, ONLY for filters written in the query. "best", "top" and "popular" are not filters,
+   and the entity type itself is not a filter. Never invent a style, type or price.
+   location, null or {"column", "names"}. names starts with the place exactly as written in
+   the query, then up to 8 well known neighborhoods or cities inside it.
+   numeric, a limit like "cheap" or "after 2020" as {"column", "op", "value"}, op is >, >=, < or <=,
+   value is a number. Price ranges use 1 to 4 for $ to $$$$.
+   categorical, a kind the query asks for, as {"column", "keywords"}. keywords hold that word
+   from the query plus synonyms.
 
-   Examples:
-     "best pizza places in San Francisco"
-       -> name, neighborhood, pizza_style, signature_pie, price_range, highlights
-     "autonomous vehicle companies"
-       -> name, av_focus, autonomy_level, primary_market, commercial_status, highlights
-     "AI startups in healthcare"
-       -> name, focus_area, key_product, funding, headquarters, highlights
-     "open source database tools"
-       -> name, database_type, license, best_for, main_language, highlights
-
-   Avoid:
-   - contact or lookup details anyone can find on a map: phone, address,
-     opening hours, email
-   - generic profile fields unless the query asks for them
-     (founded_year only if the query mentions a year or age)
-   - facts that are rarely public for this kind of entity
-     (revenue, profit, exact employee count, user counts)
-
-   If the query names a filter (a city, a year, a price), include a column
-   that holds it. Use short snake_case names.
-   The examples show the style only. Choose columns that fit THIS topic.
-
-3. Write EXACTLY 3 different search queries that find list, ranking or review
-   pages naming many of these entities. Put the best query first.
-   Only add a year to a query if it is the current year given by the user.
-
-4. Turn the real filters in the query into ranking rules. Use your EXACT column names.
-   - "location": {"column": "...", "names": ["place", "nickname", "main sub-areas", ...]} or null
-     List the place first, then up to 8 well known neighborhoods or cities inside it.
-   - "numeric": [{"column": "...", "op": ">", ">=", "<" or "<=", "value": number}]
-   - "categorical": [{"column": "...", "keywords": ["word", "synonym", ...]}]
-   Ignore words that are not filters, like "best", "top" or "popular".
-   Examples:
-     "cheap pizza places in Brooklyn"
-       -> {"location": {"column": "neighborhood", "names": ["Brooklyn", "BK", "Williamsburg", "DUMBO", "Park Slope", "Bushwick"]},
+Example query "cheap vegan pizza in Brooklyn"
+{"entity_type": "pizza restaurants",
+ "columns": ["name", "neighborhood", "pizza_style", "signature_pie", "price_range", "vegan_options", "highlights"],
+ "search_queries": ["best vegan pizza Brooklyn", "Brooklyn vegan pizza places ranked", "cheap vegan pizza Brooklyn list"],
+ "rules": {"location": {"column": "neighborhood", "names": ["Brooklyn", "Williamsburg", "Bushwick", "Park Slope", "DUMBO"]},
            "numeric": [{"column": "price_range", "op": "<=", "value": 2}],
-           "categorical": [{"column": "pizza_style", "keywords": ["pizza", "pizzeria"]}]}
-     "AI startups in healthcare founded after 2020"
-       -> {"location": null,
-           "numeric": [{"column": "founded_year", "op": ">", "value": 2020}],
-           "categorical": [{"column": "focus_area", "keywords": ["health", "healthcare", "medical", "clinical"]}]}
+           "categorical": [{"column": "vegan_options", "keywords": ["vegan", "plant based", "dairy free"]}]},
+ "rationale": "one sentence"}
 
-Respond with ONLY a JSON object:
-{
-  "entity_type": "short description",
-  "columns": ["name", "...", "highlights"],
-  "search_queries": ["query1", "query2", "query3"],
-  "rules": {"location": null, "numeric": [], "categorical": []},
-  "rationale": "one sentence"
-}"""
+Respond with ONLY a JSON object with these keys."""
 
 
 def _snake(column: str) -> str:
@@ -120,14 +81,22 @@ def _words(values) -> list[str]:
     return [str(v).strip() for v in values if str(v).strip()]
 
 
-def _clean_rules(rules, columns: list[str]) -> dict:
+def _in_query(word: str, query: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(word.lower())}(?!\w)", query.lower()) is not None
+
+
+def _clean_rules(rules, columns: list[str], query: str) -> dict:
     clean = {"location": None, "numeric": [], "categorical": []}
     if not isinstance(rules, dict):
         return clean
 
     location = rules.get("location")
-    if isinstance(location, dict) and _snake(location.get("column", "")) in columns and _words(location.get("names")):
-        clean["location"] = {"column": _snake(location["column"]), "names": _words(location["names"])[:MAX_PLACE_NAMES]}
+    if isinstance(location, dict) and _snake(location.get("column", "")) in columns:
+        names = _words(location.get("names"))
+        named = [n for n in names if _in_query(n, query)]
+        if named:
+            ordered = named + [n for n in names if n not in named]
+            clean["location"] = {"column": _snake(location["column"]), "names": ordered[:MAX_PLACE_NAMES]}
 
     for rule in rules.get("numeric") or []:
         if not isinstance(rule, dict) or _snake(rule.get("column", "")) not in columns:
@@ -143,8 +112,9 @@ def _clean_rules(rules, columns: list[str]) -> dict:
     for rule in rules.get("categorical") or []:
         if not isinstance(rule, dict) or _snake(rule.get("column", "")) not in columns:
             continue
-        if _words(rule.get("keywords")):
-            clean["categorical"].append({"column": _snake(rule["column"]), "keywords": _words(rule["keywords"])})
+        keywords = _words(rule.get("keywords"))
+        if any(_in_query(k, query) for k in keywords):
+            clean["categorical"].append({"column": _snake(rule["column"]), "keywords": keywords})
 
     return clean
 
@@ -184,7 +154,7 @@ async def plan_search(client: AsyncOpenAI, query: str) -> SearchPlan:
             entity_type=str(data.get("entity_type") or query),
             columns=columns,
             search_queries=_clean_queries(data.get("search_queries", []), query),
-            rules=_clean_rules(data.get("rules"), columns),
+            rules=_clean_rules(data.get("rules"), columns, query),
             rationale=str(data.get("rationale", "")),
         )
     except Exception as exc:
