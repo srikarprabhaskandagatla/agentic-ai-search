@@ -99,6 +99,19 @@ function showError(message) {
   $("error").hidden = false;
 }
 
+function showEmpty(message) {
+  $("empty-msg").textContent = message;
+  $("empty").hidden = false;
+}
+
+function isBlank(cell) {
+  return !cell || cell.value === null || cell.value === undefined || cell.value === "";
+}
+
+function hasDetails(entities, columns) {
+  return entities.some(e => columns.some(col => col !== "name" && !isBlank(e.cells[col])));
+}
+
 async function startSearch() {
   const query = $("query").value.trim();
   if (!query) return;
@@ -107,6 +120,7 @@ async function startSearch() {
   document.querySelector(".app").classList.add("ran");
   $("results").hidden = true;
   $("error").hidden = true;
+  $("empty").hidden = true;
   $("progress").hidden = false;
   buildSteps();
   $("bar-fill").style.width = "0%";
@@ -158,8 +172,16 @@ function handleEvent(msg) {
   } else if (msg.type === "result") {
     state.result = msg.data;
     $("progress").hidden = true;
+    const { entities = [], columns = [] } = msg.data;
+    if (!entities.length) {
+      showEmpty("The pages we found did not name any matches. Try a more specific query or Agentic mode.");
+      return;
+    }
     renderResults(msg.data);
     $("results").hidden = false;
+    if (!hasDetails(entities, columns)) {
+      showEmpty("We found names but no details we could back with a source. Try Agentic mode to search more pages.");
+    }
   } else if (msg.type === "error") {
     $("progress").hidden = true;
     showError(msg.message);
@@ -171,7 +193,7 @@ function confLevel(conf) {
 }
 
 function cellHtml(col, cell, entitySources) {
-  if (!cell || cell.value === null || cell.value === undefined || cell.value === "") {
+  if (isBlank(cell)) {
     return `<td class="${col === "name" ? "name" : ""}"><span class="null">-</span></td>`;
   }
   const val = String(cell.value);
