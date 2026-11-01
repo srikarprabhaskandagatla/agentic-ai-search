@@ -471,6 +471,20 @@ async def test_fill_respects_token_budget():
     assert prompt.count("Hippocratic AI fact number") == 1
 
 
+
+@pytest.mark.asyncio
+async def test_fill_cuts_the_call_to_fit_the_token_limit():
+    from backend.pipeline.filler import fill_from_chunks, _call_tokens
+
+    hits = [(_chunk(f"Hippocratic AI fact number {i}. " + "filler words here " * 30, f"https://h{i}.com"), 0.9) for i in range(2)]
+    client = _fill_client([])
+    columns = ["name"] + [f"col_{i}" for i in range(6)]
+    await fill_from_chunks(client, [_entity("Hippocratic AI")], columns, "startups",
+                           _FakeIndex({"Hippocratic AI": hits}), token_limit=1800)
+    prompt = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+    assert _call_tokens(prompt) <= 1800
+    assert prompt.count('"column"') < 6
+
 # Resolver
 def test_normalise_name(): # Name normalisation should collapse common variations
     from backend.pipeline.resolver import _normalise_name
@@ -978,6 +992,35 @@ async def test_planner_keeps_valid_rules_and_drops_bad_ones():
     }
 
 
+
+@pytest.mark.asyncio
+async def test_planner_rules_must_come_from_the_query():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({
+        "entity_type": "pizza", "search_queries": ["q"],
+        "columns": ["name", "neighborhood", "pizza_style"],
+        "rules": {
+            "location": {"column": "neighborhood", "names": ["Back Bay", "North End", "Boston"]},
+            "categorical": [{"column": "pizza_style", "keywords": ["Neapolitan"]}],
+        },
+    })
+    plan = await plan_search(client, "best pizza places in Boston")
+    assert plan.rules["location"]["names"] == ["Boston", "Back Bay", "North End"]
+    assert plan.rules["categorical"] == []
+
+
+@pytest.mark.asyncio
+async def test_planner_drops_location_not_in_query():
+    from backend.pipeline.planner import plan_search
+
+    client = _planner_client({
+        "entity_type": "pizza", "search_queries": ["q"], "columns": ["name", "neighborhood", "style"],
+        "rules": {"location": {"column": "neighborhood", "names": ["Back Bay", "North End"]}},
+    })
+    plan = await plan_search(client, "best pizza places in Boston")
+    assert plan.rules["location"] is None
+
 @pytest.mark.asyncio
 async def test_planner_rules_default_when_missing():
     from backend.pipeline.planner import plan_search
@@ -1083,6 +1126,14 @@ def test_pick_columns_falls_back_to_80_percent():
     rows = [_entity(f"E{i}", a="1", b="1" if i < 9 else "", c="1" if i < 8 else "", d="1" if i < 5 else "") for i in range(10)]
     assert pick_columns(rows, ["name", "a", "b", "c", "d"], keep=set()) == ["name", "a", "b", "c"]
 
+
+
+def test_pick_columns_hides_empty_columns_and_shows_left_over_data():
+    from backend.pipeline.ranker import pick_columns
+
+    rows = [_entity("A", city="Boston", price="$$", note="great"), _entity("B"), _entity("C")]
+    cols = pick_columns(rows, ["name", "style", "city", "price", "note"], keep={"style"})
+    assert cols == ["name", "city", "price", "note"]
 
 def test_rank_without_rules_or_entities_is_safe():
     from backend.pipeline.ranker import rank
