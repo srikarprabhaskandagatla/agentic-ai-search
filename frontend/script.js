@@ -232,9 +232,10 @@ function renderResults(data) {
 
   const headers = columns.map(c => `<th>${esc(label(c))}</th>`);
   if (hasRanking) headers.splice(1, 0, `<th class="match">Match</th>`);
+  headers.unshift(`<th class="rank">Rank</th>`);
   $("thead").innerHTML = `<tr>${headers.join("")}</tr>`;
 
-  $("tbody").innerHTML = entities.map(entity => {
+  $("tbody").innerHTML = entities.map((entity, i) => {
     const entitySources = [];
     const cells = columns.map(col => cellHtml(col, entity.cells[col], entitySources));
     if (hasRanking) {
@@ -243,6 +244,7 @@ function renderResults(data) {
       const cls = share === 1 ? "full" : share >= 0.5 ? "part" : "none";
       cells.splice(1, 0, `<td class="match"><span class="badge ${cls}" title="${n} of ${ranking.total} rules met">${n}/${ranking.total}</span></td>`);
     }
+    cells.unshift(`<td class="rank">${i + 1}</td>`);
     return `<tr>${cells.join("")}</tr>`;
   }).join("");
 
