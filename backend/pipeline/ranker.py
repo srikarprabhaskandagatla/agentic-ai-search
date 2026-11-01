@@ -109,9 +109,12 @@ def pick_columns(entities: list[Entity], columns: list[str], keep: set[str]) -> 
     if not entities:
         return columns
     fill = {col: sum(1 for e in entities if _text(e, col)) / len(entities) for col in columns}
-    chosen = {col for col in columns if col == "name" or col in keep or fill[col] == 1.0}
+    has_data = {col for col in columns if fill[col] > 0}
+    chosen = {col for col in has_data if col == "name" or col in keep or fill[col] == 1.0}
     if len(chosen - {"name"}) < MIN_KEEP_COLUMNS:
-        chosen |= {col for col in columns if fill[col] >= FALLBACK_FILL}
+        chosen |= {col for col in has_data if fill[col] >= FALLBACK_FILL}
+    if len(chosen - {"name"}) < MIN_KEEP_COLUMNS:
+        chosen |= has_data
     return [col for col in columns if col in chosen]
 
 
@@ -141,10 +144,10 @@ def rank(
         reverse=True,
     )[:TOP_N]
     top = [entities[i] for i in order]
-    shown = pick_columns(top, columns, _rule_columns(rules))
+    col_show = pick_columns(top, columns, _rule_columns(rules))
 
     for i in order:
         logger.info("[rank] %-35s met=%d/%d relevance=%.2f sources=%d",
                     entities[i].get_name(), met[i], len(checks), relevance[i], _source_count(entities[i]))
-    logger.info("Columns shown: %s, dropped: %s", shown, [c for c in columns if c not in shown])
-    return top, shown, RankingInfo(total=len(checks), labels=labels, scores={entities[i].id: met[i] for i in order})
+    logger.info("Columns shown: %s, dropped: %s", col_show, [c for c in columns if c not in col_show])
+    return top, col_show, RankingInfo(total=len(checks), labels=labels, scores={entities[i].id: met[i] for i in order})
