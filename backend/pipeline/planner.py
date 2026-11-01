@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 MAX_COLUMNS = 8
 OUTPUT_TOKENS = 1024
 NUM_QUERIES = 3
+MAX_PLACE_NAMES = 10
 VALID_OPS = {">", ">=", "<", "<="}
 LOOKUP_COLUMNS = {
     "phone", "phone_number", "telephone", "address", "street_address", "email",
@@ -66,13 +67,14 @@ Given a topic query you must:
    Only add a year to a query if it is the current year given by the user.
 
 4. Turn the real filters in the query into ranking rules. Use your EXACT column names.
-   - "location": {"column": "...", "names": ["place", "nickname", ...]} or null
+   - "location": {"column": "...", "names": ["place", "nickname", "main sub-areas", ...]} or null
+     List the place first, then up to 8 well known neighborhoods or cities inside it.
    - "numeric": [{"column": "...", "op": ">", ">=", "<" or "<=", "value": number}]
    - "categorical": [{"column": "...", "keywords": ["word", "synonym", ...]}]
    Ignore words that are not filters, like "best", "top" or "popular".
    Examples:
      "cheap pizza places in Brooklyn"
-       -> {"location": {"column": "neighborhood", "names": ["Brooklyn", "BK"]},
+       -> {"location": {"column": "neighborhood", "names": ["Brooklyn", "BK", "Williamsburg", "DUMBO", "Park Slope", "Bushwick"]},
            "numeric": [{"column": "price_range", "op": "<=", "value": 2}],
            "categorical": [{"column": "pizza_style", "keywords": ["pizza", "pizzeria"]}]}
      "AI startups in healthcare founded after 2020"
@@ -125,7 +127,7 @@ def _clean_rules(rules, columns: list[str]) -> dict:
 
     location = rules.get("location")
     if isinstance(location, dict) and _snake(location.get("column", "")) in columns and _words(location.get("names")):
-        clean["location"] = {"column": _snake(location["column"]), "names": _words(location["names"])}
+        clean["location"] = {"column": _snake(location["column"]), "names": _words(location["names"])[:MAX_PLACE_NAMES]}
 
     for rule in rules.get("numeric") or []:
         if not isinstance(rule, dict) or _snake(rule.get("column", "")) not in columns:
