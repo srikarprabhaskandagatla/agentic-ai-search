@@ -88,6 +88,8 @@ flowchart LR
 | Fill Loop | `filler.py` | 1 to 3 calls | Finds empty cells, pulls chunks that name that row from FAISS, fills them in one call and checks every quote |
 | Rank | `ranker.py` | none | Scores rows by the rules they meet, then by meaning, sources and fullness, and keeps only full columns |
 
+For a full run with real values at every stage, see the [end to end walkthrough](../backend/README.md). It follows "cheap pizza in Brooklyn" from the question to the final table.
+
 ### Plan
 One call returns the entity type, the columns, 3 queries and the rank rules. Lookup columns like phone or address are removed, since they waste a column. Rules come in three kinds, a location with its main sub-areas, a number limit like price at most 2, and keywords like pizza. The code checks each rule against the planned columns and drops any that do not match.
 
