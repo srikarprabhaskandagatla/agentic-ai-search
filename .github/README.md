@@ -136,10 +136,21 @@ The backend serves the frontend too. Open `localhost` on port 7860 in your brows
 
 ```bash
 pip install pytest pytest-asyncio
-pytest tests -q
+python -m pytest tests -v --no-header
 ```
 
-There are 91 tests. All LLM, search and embedding calls are faked, and no API keys are needed.
+All 85 tests live in `tests/test_pipeline.py`. They run with pytest and use `unittest.mock` (`AsyncMock`, `MagicMock` and `patch`) to fake every LLM, search and embedding call. No API keys are needed. The latest run is saved in [`tests/test_log.txt`](../tests/test_log.txt).
+
+| Part | What the tests check |
+|---|---|
+| Planner | Column cleanup, the column cap, query padding, rule checks and the fallback plan |
+| Retriever | Page text, URL cleanup, duplicate and seen pages, blocked domains, failed queries and the backup query |
+| Extractor | Linking rows to chunks, dropping placeholders, the token budget and API failures |
+| Embedder | Chunk size and overlap, picking the best chunks and FAISS search |
+| Resolver | Name cleanup, fuzzy and rare word merges, the website check and sources that agree |
+| Filler | Quote checks, exact numbers, trimming chunks, the token budget and every stop rule of the loop |
+| Ranker | Rule scores, whole word checks, numbers with units, tie breaks, the top 10 and column picking |
+| Pacer | Waiting when the minute is full and recording real usage |
 
 ### Deploy
 
