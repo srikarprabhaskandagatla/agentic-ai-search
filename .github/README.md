@@ -54,7 +54,7 @@
 
 You type a question like "AI startups in healthcare" or "cheap pizza in Brooklyn". The app plans the columns, searches the web, reads the pages and builds a table of up to 10 rows.
 
-Every cell links to the page it came from and the exact quote that supports it. If no page supports a value, the cell stays empty. The app never fills a cell from the model's memory.
+Every cell links to the page it came from and the exact quote that supports it. If no page supports a value, the cell stays empty. The app never fills a cell from the model's memory. If the pages hold no details at all, the app shows a notice instead of an empty table.
 
 There are two modes.
 
@@ -86,12 +86,12 @@ flowchart LR
 | Embed and Extract | `embedder.py`, `extractor.py` | 1 call | Splits pages into chunks, puts them in a FAISS index, sends the best chunks in one call and gets rows with quotes |
 | Resolve | `resolver.py` | none | Merges rows that name the same thing, using name cleanup, fuzzy match, a website check and rare word overlap |
 | Fill Loop | `filler.py` | 1 to 3 calls | Finds empty cells, pulls chunks that name that row from FAISS, fills them in one call and checks every quote |
-| Rank | `ranker.py` | none | Scores rows by the rules they meet, then by meaning, sources and fullness, and keeps only full columns |
+| Rank | `ranker.py` | none | Scores rows by the rules they meet, then by meaning, sources and fullness, and hides empty columns |
 
 For a full run with real values at every stage, see the [end to end walkthrough](../backend/README.md). It follows "cheap pizza in Brooklyn" from the question to the final table.
 
 ### Plan
-One call returns the entity type, the columns, 3 queries and the rank rules. Lookup columns like phone or address are removed, since they waste a column. Rules come in three kinds, a location with its main sub-areas, a number limit like price at most 2, and keywords like pizza. The code checks each rule against the planned columns and drops any that do not match.
+One call returns the entity type, the columns, 3 queries and the rank rules. Lookup columns like phone or address are removed, since they waste a column. Rules come only from filters written in the query, in three kinds, a location with its main sub-areas, a number limit like price at most 2, and keywords like vegan. Words like "best" and the entity type itself are not filters. The code drops a rule that uses a missing column, a location that does not name a place from the query, and keywords that do not appear in the query. The place from the query always comes first in the location list. The prompt is about 600 tokens with one full example.
 
 ### Retrieve
 Tavily returns the page text along with each result. We clean out images, links and menu lines, and keep up to 8,000 characters per page. If the 2 main queries find fewer than 4 pages, the backup query runs.
@@ -108,10 +108,10 @@ For every empty cell, FAISS looks up chunks for "row name plus column". A chunk 
 In Agentic mode the loop runs up to 3 times. Each round searches Tavily for the rows that still have gaps, adds the new pages to the index and fills again. It stops when nothing is empty, when a round fills nothing, or when there are no new pages. If the first pass finds fewer than 8 rows, Agentic also runs the backup query and extracts again.
 
 ### Rank
-No LLM here either. Each row gets one point per rule it meets, checked on whole words. Price signs like "$$" count as 2, and 5M or 1.5B become real numbers. Ties are broken by how close the row is in meaning to the question, then by source count, then by how full the row is. The top 10 are kept. Columns are shown only if a rule uses them or every row has them filled. The table shows a Match badge like 3/3 and the rules as pills.
+No LLM here either. Each row gets one point per rule it meets, checked on whole words. Price signs like "$$" count as 2, and 5M or 1.5B become real numbers. Ties are broken by how close the row is in meaning to the question, then by source count, then by how full the row is. The top 10 are kept. Columns are picked after sorting. A column that is empty in every row is never shown. A rule column is shown if any row has a value, and other columns only if every row has them filled. If fewer than 3 are left, columns that are 80% filled come back, then any column with data. The table shows a Match badge like 3/3 and the rules as pills.
 
 ### Token budget
-The Groq free tier allows about 8,000 tokens a minute. A shared pacer in `config.py` keeps a 60 second window with a limit of 7,900. Before each call it reserves the worst case and waits if that would go over. After the call it records the real usage. In Fast mode the fill call uses whatever is left of the minute.
+The Groq free tier allows about 8,000 tokens a minute. A shared pacer in `config.py` keeps a 60 second window with a limit of 7,900. Before each call it reserves the worst case and waits if that would go over. After the call it records the real usage. Every call is built to stay under the limit, which means Groq never rejects one for being too big. In Fast mode the fill call is cut to fit the tokens left in the minute, and in a normal run Fast does not wait.
 
 ---
 
@@ -141,17 +141,17 @@ pip install pytest pytest-asyncio
 python -m pytest tests -v --no-header
 ```
 
-All 85 tests live in `tests/test_pipeline.py`. They run with pytest and use `unittest.mock` (`AsyncMock`, `MagicMock` and `patch`) to fake every LLM, search and embedding call. No API keys are needed. The latest run is saved in [`tests/test_log.txt`](../tests/test_log.txt).
+All 89 tests live in `tests/test_pipeline.py`. They run with pytest and use `unittest.mock` (`AsyncMock`, `MagicMock` and `patch`) to fake every LLM, search and embedding call. No API keys are needed. The latest run is saved in [`tests/test_log.txt`](../tests/test_log.txt).
 
 | Part | What the tests check |
 |---|---|
-| Planner | Column cleanup, the column cap, query padding, rule checks and the fallback plan |
+| Planner | Column cleanup, the column cap, query padding, rule checks, rules that must come from the query and the fallback plan |
 | Retriever | Page text, URL cleanup, duplicate and seen pages, blocked domains, failed queries and the backup query |
 | Extractor | Linking rows to chunks, dropping placeholders, the token budget and API failures |
 | Embedder | Chunk size and overlap, picking the best chunks and FAISS search |
 | Resolver | Name cleanup, fuzzy and rare word merges, the website check and sources that agree |
-| Filler | Quote checks, exact numbers, trimming chunks, the token budget and every stop rule of the loop |
-| Ranker | Rule scores, whole word checks, numbers with units, tie breaks, the top 10 and column picking |
+| Filler | Quote checks, exact numbers, trimming chunks, the token budget, fitting the call into the tokens left and every stop rule of the loop |
+| Ranker | Rule scores, whole word checks, numbers with units, tie breaks, the top 10, column picking and hiding empty columns |
 | Pacer | Waiting when the minute is full and recording real usage |
 
 ### Deploy
@@ -179,7 +179,8 @@ The live demo is a Hugging Face Space. `app.py` is the entry point, and the keys
 ## Known Limitations
 
 - **At most 10 rows.** Good for a summary, not for a full list.
-- **Free tier speed.** When the minute's token budget is used up, the pacer waits. A busy minute can add some seconds.
+- **Free tier speed.** In Agentic mode, when the minute's token budget is used up, the pacer waits. A busy minute can add some seconds.
+- **Thin pages give thin tables.** If the pages found list names without details, the table is small. Agentic mode searches more pages.
 - **Location matching uses words.** A row passes the location rule only if its cell names the place or one of the sub-areas the planner listed.
 - **Empty is better than wrong.** Cells with no quote in the found pages stay empty, even when the answer is well known.
 - **English only.** Prompts and the embedding model are in English.
