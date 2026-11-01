@@ -4,7 +4,6 @@ from typing import Any, Optional
 from datetime import datetime
 
 
-# Source attribution  the core differentiator of this system
 class SourceRef(BaseModel):
     url: str
     title: str = ""
@@ -14,7 +13,7 @@ class CellValue(BaseModel):
     value: Any
     sources: list[SourceRef] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    llm_filled: bool = False  # True when value came from LLM knowledge, not a web source
+    llm_filled: bool = False  
 
     @property
     def display_value(self) -> str:
@@ -23,7 +22,6 @@ class CellValue(BaseModel):
         return str(self.value)
 
 
-# Entity - a single row in the output table
 class Entity(BaseModel):
     id: str
     cells: dict[str, CellValue]  # column_name to CellValue
@@ -38,11 +36,10 @@ class Entity(BaseModel):
         return filled / len(columns) if columns else 0.0
 
 
-# Pipeline intermediate models
 class SearchPlan(BaseModel):
     entity_type: str
-    columns: list[str]        # Inferred schema columns (always starts with "name")
-    search_queries: list[str] # Diverse queries to cover different angles
+    columns: list[str]        
+    search_queries: list[str] 
     rationale: str
     rules: dict = Field(default_factory=dict)
 
@@ -53,11 +50,10 @@ class ScrapedPage(BaseModel):
     content: str
 
 
-# Ranking metadata attached to the final result
 class RankingInfo(BaseModel):
     total: int                        # total number of constraints extracted
     labels: list[str]                 # human-readable constraint descriptions
-    scores: dict[str, int]           # entity_id → n constraints satisfied
+    scores: dict[str, int]           # entity_id is n constraints satisfied
 
 
 # Final output
@@ -81,7 +77,6 @@ class EntityTable(BaseModel):
         return len(self.sources_consulted)
 
 
-# Streaming progress
 class ProgressUpdate(BaseModel):
     stage: str       # planning | searching | scraping | extracting | resolving | analyzing | done
     message: str
