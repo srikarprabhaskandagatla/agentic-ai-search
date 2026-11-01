@@ -222,7 +222,6 @@ tbody tr.detail:hover { background: transparent; }
 .conf.high { background: var(--bin-5); }
 .conf.mid { background: var(--bin-2); }
 .conf.low { background: transparent; border: 1.5px solid var(--text-muted); }
-.star { color: var(--accent); font-weight: 700; margin-right: 2px; }
 .srcs { display: inline-flex; gap: 3px; flex: none; }
 .src {
   min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 1;
