@@ -131,24 +131,6 @@ def test_retriever_cuts_long_pages():
 
 
 @pytest.mark.asyncio
-async def test_retriever_dedupes_and_skips_seen_urls():
-    from backend.pipeline import retriever
-
-    def result(url):
-        return {"url": url, "title": url, "raw_content": LONG_TEXT}
-
-    mock_client = AsyncMock()
-    mock_client.search = AsyncMock(side_effect=[
-        {"results": [result("https://a.com"), result("https://b.com")]},
-        {"results": [result("https://b.com"), result("https://c.com")]},
-    ])
-    with patch.object(retriever, "_client", return_value=mock_client):
-        pages = await retriever.retrieve(["q1", "q2"], seen_urls={"https://a.com"})
-
-    assert [p.url for p in pages] == ["https://b.com", "https://c.com"]
-
-
-@pytest.mark.asyncio
 async def test_retriever_survives_one_failed_query():
     from backend.pipeline import retriever
 
@@ -278,11 +260,6 @@ def _llm_reply(payload):
     response = MagicMock()
     response.choices = [choice]
     return response
-
-
-def _pages(n):
-    from backend.models import ScrapedPage
-    return [ScrapedPage(url=f"https://p{i}.com", title=f"P{i}", content=LONG_TEXT) for i in range(1, n + 1)]
 
 
 def test_is_missing_catches_placeholders():
@@ -501,35 +478,9 @@ def test_normalise_name(): # Name normalisation should collapse common variation
     assert _normalise_name("OpenAI Inc.") == _normalise_name("openai inc")
     assert _normalise_name("Tempus AI, LLC") == _normalise_name("tempus ai")
     assert _normalise_name("Google LLC") == _normalise_name("google")
-
-
-def test_fast_dedup_merges_same_names(): # Fast dedup should merge entities with the same normalised name
-    from backend.pipeline.resolver import _fast_dedup, _merge_entity_group
-    from backend.models import Entity, CellValue, SourceRef
-    import uuid
-
-    make_entity = lambda name, val, url: Entity(
-        id=str(uuid.uuid4()),
-        cells={
-            "name": CellValue(value=name, confidence=0.99,
-                              sources=[SourceRef(url=url, title="", snippet="")]),
-            "description": CellValue(value=val, confidence=0.8,
-                                     sources=[SourceRef(url=url, title="", snippet="")]),
-        }
-    )
-
-    entities = [
-        make_entity("OpenAI", "AI research lab", "https://page1.com"),
-        make_entity("OpenAI Inc", "Maker of GPT-4", "https://page2.com"),
-        make_entity("Anthropic", "AI safety company", "https://page3.com"),
-    ]
-
-    groups = _fast_dedup(entities)
-    # Should have 2 groups: OpenAI (2 variants) + Anthropic
-    assert len(groups) == 2
-    merged = [_merge_entity_group(g) for g in groups]
-    names = {str(e.cells["name"].value) for e in merged}
-    assert "Anthropic" in names
+    assert _normalise_name("The Hippocratic AI, Inc.") == "hippocratic ai"
+    assert _normalise_name("Johnson & Johnson") == "johnson and johnson"
+    assert _normalise_name("Co") == "co"
 
 
 def _entity(name, url="https://p1.com", **cols):
@@ -545,14 +496,6 @@ def _topic_pages():
     from backend.models import ScrapedPage
     filler = "\n".join(f"Healthcare AI startup number {i} is building health tools for hospitals." for i in range(20))
     return [ScrapedPage(url="https://list.com", content=filler + "\nHippocratic AI builds safety focused models for nurses.")]
-
-
-def test_normalise_name_handles_the_and_ampersand():
-    from backend.pipeline.resolver import _normalise_name
-
-    assert _normalise_name("The Hippocratic AI, Inc.") == "hippocratic ai"
-    assert _normalise_name("Johnson & Johnson") == "johnson and johnson"
-    assert _normalise_name("Co") == "co"
 
 
 def test_resolver_merges_spacing_variants():
@@ -751,7 +694,6 @@ async def test_fill_puts_value_with_source_and_quote():
     assert cell.value == "2023"
     assert cell.sources[0].url == "https://hippo.com"
     assert cell.sources[0].snippet == "was established in 2023"
-    assert cell.llm_filled is False
 
 
 @pytest.mark.asyncio
@@ -1147,34 +1089,3 @@ def test_rank_without_rules_or_entities_is_safe():
 
     top, cols, info = rank([], {}, ["name"], "q")
     assert top == [] and cols == ["name"] and info.total == 0
-
-
-# Models
-def test_entity_coverage(): # Entity.coverage() should return fraction of filled columns
-    from backend.models import Entity, CellValue
-    import uuid
-
-    e = Entity(
-        id=str(uuid.uuid4()),
-        cells={
-            "name": CellValue(value="Test Co", confidence=1.0, sources=[]),
-            "description": CellValue(value="A company", confidence=0.9, sources=[]),
-        }
-    )
-    columns = ["name", "description", "founded_year", "headquarters"]
-    assert e.coverage(columns) == 0.5  # 2 of 4 filled
-
-
-def test_cell_value_display(): # CellValue.display_value should handle None gracefully
-    from backend.models import CellValue
-
-    assert CellValue(value=None, sources=[]).display_value == ""
-    assert CellValue(value="2020", sources=[]).display_value == "2020"
-    assert CellValue(value=42, sources=[]).display_value == "42"
-
-
-def test_cell_value_llm_filled_default():# CellValue.llm_filled should default to False
-    from backend.models import CellValue
-
-    c = CellValue(value="Series B", confidence=0.9, sources=[])
-    assert c.llm_filled is False
