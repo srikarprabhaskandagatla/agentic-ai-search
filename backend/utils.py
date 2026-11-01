@@ -82,23 +82,3 @@ def extract_json_obj(text: str) -> dict | None: # Extract the first balanced JSO
         return json.loads(chunk)
     except json.JSONDecodeError:
         return None
-
-
-def extract_json_arr(text: str) -> list | None: # Extract the first balanced JSON array from LLM output
-    text = _strip_noise(text)
-    # Fast path
-    try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
-        pass
-    
-    # Balanced extraction
-    chunk = _balanced_extract(text, "[", "]")
-    if chunk is None:
-        return None
-    try:
-        return json.loads(chunk)
-    except json.JSONDecodeError:
-        return None
