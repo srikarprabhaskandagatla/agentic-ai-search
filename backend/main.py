@@ -109,6 +109,7 @@ async def search_endpoint(request: SearchRequest):
                 all_sources.extend(page.url for page in pages)
                 all_pages.extend(pages)
 
+            # Initiate FAISS Index
             try:
                 chunk_index = embedder.ChunkIndex([], [])
             except Exception as exc:
@@ -117,8 +118,8 @@ async def search_endpoint(request: SearchRequest):
 
             # 2. Search
             await send_progress("searching", "Searching the web", 0.12)
-            pages, used = await retrieve_with_backup(plan.search_queries, seen_urls)
-            all_queries_used.extend(used)
+            pages, used_query = await retrieve_with_backup(plan.search_queries, seen_urls)
+            all_queries_used.extend(used_query)
             keep_pages(pages)
             await send_progress("searching", f"Read {len(pages)} pages", 0.25)
 
@@ -133,11 +134,11 @@ async def search_endpoint(request: SearchRequest):
                     logger.warning("Embedding failed: %s", exc)
                     chunks, vectors = embedder.chunk_pages(pages), None
                 topic = f"{plan.entity_type}: {', '.join(plan.columns)}"
-                best = await asyncio.to_thread(embedder.top_chunks, chunks, vectors, topic, EXTRACT_INPUT_TOKENS)
+                best_chunks = await asyncio.to_thread(embedder.top_chunks, chunks, vectors, topic, EXTRACT_INPUT_TOKENS)
 
                 # 3. Extract
-                await send_progress("extracting", f"Extracting entities from {len(best)} best chunks", 0.32)
-                all_entities.extend(await extract_from_chunks(llm_client, best, plan.columns, plan.entity_type))
+                await send_progress("extracting", f"Extracting entities from {len(best_chunks)} best chunks", 0.32)
+                all_entities.extend(await extract_from_chunks(llm_client, best_chunks, plan.columns, plan.entity_type))
 
                 # 4. Resolve
                 await send_progress("resolving", "Merging duplicate entities", 0.45)
@@ -147,7 +148,7 @@ async def search_endpoint(request: SearchRequest):
             if pages:
                 await read_pages(pages)
 
-            unused = [q for q in plan.search_queries if q not in used]
+            unused = [q for q in plan.search_queries if q not in used_query]
 
             # When is Selected Agentic
             if agentic and len(all_entities) < MIN_ENTITIES and unused:
