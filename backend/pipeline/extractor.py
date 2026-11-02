@@ -86,20 +86,20 @@ def _chunk_for(raw: dict, chunks: list[Chunk]) -> Chunk | None:
 
 def _chunks_text(chunks: list[Chunk]) -> tuple[str, list[Chunk]]:
     parts: list[str] = []
-    kept: list[Chunk] = []
+    kept_chunks: list[Chunk] = []
     used = 0
     for chunk in chunks:
-        part = CHUNK_TEMPLATE.format(number=len(kept) + 1, title=chunk.title, text=chunk.text)
-        cost = estimate_tokens(part)
-        if used + cost > EXTRACT_INPUT_TOKENS:
-            if not kept:
+        part = CHUNK_TEMPLATE.format(number=len(kept_chunks) + 1, title=chunk.title, text=chunk.text)
+        token_cost = estimate_tokens(part)
+        if used + token_cost > EXTRACT_INPUT_TOKENS:
+            if not kept_chunks:
                 parts.append(fit_text(part, EXTRACT_INPUT_TOKENS))
-                kept.append(chunk)
+                kept_chunks.append(chunk)
             break
         parts.append(part)
-        kept.append(chunk)
-        used += cost
-    return "\n".join(parts), kept
+        kept_chunks.append(chunk)
+        used += token_cost
+    return "\n".join(parts), kept_chunks
 
 
 async def extract_from_chunks(
@@ -111,7 +111,7 @@ async def extract_from_chunks(
     if not chunks:
         return []
 
-    chunks_text, kept = _chunks_text(chunks)
+    chunks_text, kept_chunks = _chunks_text(chunks)
     user = USER_TEMPLATE.format(entity_type=entity_type, columns=", ".join(columns), chunks=chunks_text)
     event = await pacer.reserve(estimate_tokens(EXTRACTOR_SYSTEM_PROMPT + user) + OUTPUT_TOKENS)
     try:
@@ -140,12 +140,12 @@ async def extract_from_chunks(
     for raw in data.get("entities", []):
         if not isinstance(raw, dict):
             continue
-        chunk = _chunk_for(raw, kept)
+        chunk = _chunk_for(raw, kept_chunks)
         if chunk is None:
             continue
         entity = _to_entity(raw, chunk, columns)
         if entity:
             entities.append(entity)
 
-    logger.info("Extracted %d entities from %d chunks", len(entities), len(kept))
+    logger.info("Extracted %d entities from %d chunks", len(entities), len(kept_chunks))
     return entities
