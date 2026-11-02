@@ -1,9 +1,8 @@
 from __future__ import annotations
-import logging, re
+import logging, operator, re
 from typing import Any
 
-import numpy as np
-
+from ..embedder import _matrix
 from ..models import Entity, RankingInfo
 from ..utils import is_missing
 from .resolver import _source_count
@@ -16,6 +15,7 @@ FALLBACK_FILL = 0.8
 RELEVANCE_STEP = 0.1
 
 UNIT_MULT = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le}
 NUMBER_PATTERN = re.compile(r"(?P<val>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>[KkMmBb](?:illion)?)?\b")
 
 
@@ -33,8 +33,6 @@ def _has_phrase(text: str, phrase: str) -> bool:
 
 def _to_number(value: Any) -> float | None:
     text = str(value).strip()
-    if not text:
-        return None
     if re.fullmatch(r"\$+", text):
         return float(len(text))
     numbers = []
@@ -47,10 +45,6 @@ def _to_number(value: Any) -> float | None:
     return max(numbers) if numbers else None
 
 
-def _passes(actual: float, op: str, limit: float) -> bool:
-    return {">": actual > limit, ">=": actual >= limit, "<": actual < limit, "<=": actual <= limit}.get(op, False)
-
-
 def _location_met(entity: Entity, rule: dict) -> bool:
     text = _text(entity, rule["column"])
     return any(_has_phrase(text, name) for name in rule["names"])
@@ -58,7 +52,7 @@ def _location_met(entity: Entity, rule: dict) -> bool:
 
 def _numeric_met(entity: Entity, rule: dict) -> bool:
     actual = _to_number(_text(entity, rule["column"]))
-    return actual is not None and _passes(actual, rule["op"], rule["value"])
+    return actual is not None and rule["op"] in OPS and OPS[rule["op"]](actual, rule["value"])
 
 
 def _categorical_met(entity: Entity, rule: dict) -> bool:
@@ -79,23 +73,13 @@ def _checks(rules: dict) -> list[tuple[str, Any, dict]]:
     return checks
 
 
-def _rule_columns(rules: dict) -> set[str]:
-    columns = {rule["column"] for rule in rules.get("numeric", []) + rules.get("categorical", [])}
-    if rules.get("location"):
-        columns.add(rules["location"]["column"])
-    return columns
-
-
 def _relevance(entities: list[Entity], columns: list[str], query: str, model) -> list[float]:
     if model is None or not entities:
         return [0.0] * len(entities)
     try:
         rows = [" | ".join(_text(e, col) for col in columns if _text(e, col)) for e in entities]
-        row_vecs = np.asarray(list(model.embed(rows)), dtype="float32")
-        query_vec = np.asarray(list(model.query_embed([query])), dtype="float32")[0]
-        row_vecs /= np.linalg.norm(row_vecs, axis=1, keepdims=True) + 1e-9
-        query_vec /= np.linalg.norm(query_vec) + 1e-9
-        return [float(s) for s in row_vecs @ query_vec]
+        scores = _matrix(model.embed(rows)) @ _matrix(model.query_embed([query]))[0]
+        return [float(s) for s in scores]
     except Exception as exc:
         logger.warning("Relevance scoring failed: %s", exc)
         return [0.0] * len(entities)
@@ -131,12 +115,12 @@ def rank(
     if not entities:
         return [], columns, RankingInfo(total=len(checks), labels=labels, scores={})
 
-    met = [sum(1 for _, check, rule in checks if check(e, rule)) for e in entities]
+    rules_met = [sum(1 for _, check, rule in checks if check(e, rule)) for e in entities]
     relevance = _relevance(entities, columns, query, model)
     order = sorted(
         range(len(entities)),
         key=lambda i: (
-            met[i],
+            rules_met[i],
             round(relevance[i] / RELEVANCE_STEP),
             _source_count(entities[i]),
             _fullness(entities[i], columns),
@@ -144,10 +128,10 @@ def rank(
         reverse=True,
     )[:TOP_N]
     top = [entities[i] for i in order]
-    col_show = pick_columns(top, columns, _rule_columns(rules))
+    col_show = pick_columns(top, columns, {rule["column"] for _, _, rule in checks})
 
     for i in order:
         logger.info("[rank] %-35s met=%d/%d relevance=%.2f sources=%d",
-                    entities[i].get_name(), met[i], len(checks), relevance[i], _source_count(entities[i]))
+                    entities[i].get_name(), rules_met[i], len(checks), relevance[i], _source_count(entities[i]))
     logger.info("Columns shown: %s, dropped: %s", col_show, [c for c in columns if c not in col_show])
-    return top, col_show, RankingInfo(total=len(checks), labels=labels, scores={entities[i].id: met[i] for i in order})
+    return top, col_show, RankingInfo(total=len(checks), labels=labels, scores={entities[i].id: rules_met[i] for i in order})
