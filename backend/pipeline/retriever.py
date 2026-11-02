@@ -83,10 +83,10 @@ async def retrieve(queries: list[str], seen_urls: set[str]) -> list[ScrapedPage]
 
 
 async def retrieve_with_backup(queries: list[str], seen_urls: set[str]) -> tuple[list[ScrapedPage], list[str]]:
-    primary, backup = queries[:PRIMARY_QUERIES], queries[PRIMARY_QUERIES:]
-    pages = await retrieve(primary, seen_urls)
-    if len(pages) >= MIN_PAGES or not backup:
-        return pages, primary
-    logger.info("Only %d pages from primary queries, running %d backup queries", len(pages), len(backup))
-    more = await retrieve(backup, seen_urls | {page.url for page in pages})
+    primary_query, backup_query = queries[:PRIMARY_QUERIES], queries[PRIMARY_QUERIES:]
+    pages = await retrieve(primary_query, seen_urls)
+    if len(pages) >= MIN_PAGES or not backup_query:
+        return pages, primary_query
+    logger.info("Only %d pages from primary queries, running %d backup queries", len(pages), len(backup_query))
+    more = await retrieve(backup_query, seen_urls | {page.url for page in pages})
     return pages + more, queries
