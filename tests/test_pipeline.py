@@ -452,10 +452,10 @@ async def test_fill_never_resends_a_chunk_for_the_same_cell():
 
     index = _FakeIndex({"Hippocratic AI": [(_chunk(), 0.9)]})
     client = _fill_client([])
-    sent = {}
+    tried = {}
     entity = _entity("Hippocratic AI")
-    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, sent=sent)
-    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, sent=sent)
+    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, tried=tried)
+    await fill_from_chunks(client, [entity], ["name", "founded"], "startups", index, tried=tried)
     assert client.chat.completions.create.call_count == 1
 
 
