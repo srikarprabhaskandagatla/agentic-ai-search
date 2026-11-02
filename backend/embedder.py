@@ -71,14 +71,14 @@ def top_chunks(chunks: list[Chunk], vectors: np.ndarray | None, query: str, toke
         order = [int(i) for i in np.argsort(-scores)]
     else:
         order = list(range(len(chunks)))
-    picked: list[int] = []
+    picked_chunks: list[int] = []
     used = 0
     for i in order:
-        cost = estimate_tokens(chunks[i].text)
-        if used + cost <= token_budget:
-            picked.append(i)
-            used += cost
-    return [chunks[i] for i in sorted(picked)]
+        token_cost = estimate_tokens(chunks[i].text)
+        if used + token_cost <= token_budget:
+            picked_chunks.append(i)
+            used += token_cost
+    return [chunks[i] for i in sorted(picked_chunks)]
 
 
 class ChunkIndex:
