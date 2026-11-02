@@ -48,7 +48,7 @@ Respond with ONLY a raw JSON object:
 class Gap:
     entity: Entity
     column: str
-    chunk_ids: list[str] = field(default_factory=list)
+    chunks: list[Chunk] = field(default_factory=list)
 
 
 def _plain(text: str) -> str:
@@ -85,38 +85,31 @@ def _trim(chunk: Chunk, entity: Entity) -> Chunk:
     return Chunk(url=chunk.url, title=chunk.title, text=" ".join(sentences[j] for j in keep))
 
 
-def _cell_key(gap: Gap) -> tuple[str, str]:
-    return gap.entity.id, gap.column
-
-
 def _attach_chunks(
     gaps: list[Gap],
     hits: list[list[tuple[Chunk, float]]],
     token_budget: int,
-    sent: dict[tuple[str, str], set[int]],
-) -> dict[str, Chunk]:
-    chunk_ids: dict[tuple[int, str], str] = {}
-    chosen: dict[str, Chunk] = {}
+    tried: dict[tuple[str, str], set[str]],
+) -> list[Gap]:
     used = 0
     for gap, gap_hits in zip(gaps, hits):
-        already = sent.setdefault(_cell_key(gap), set())
-        usable = [
-            c for c, score in gap_hits
-            if score >= MIN_SCORE and id(c) not in already and _mentions(c, gap.entity)
-        ]
-        for chunk in usable[:CHUNKS_PER_CELL]:
-            key = (id(chunk), gap.entity.id)
-            if key not in chunk_ids:
-                trimmed = _trim(chunk, gap.entity)
-                cost = estimate_tokens(trimmed.text) + CELL_TOKENS
+        seen = tried.setdefault((gap.entity.id, gap.column), set())
+        for chunk, score in gap_hits:
+            if len(gap.chunks) == CHUNKS_PER_CELL:
+                break
+            if score < MIN_SCORE or chunk.text in seen or not _mentions(chunk, gap.entity):
+                continue
+            piece = _trim(chunk, gap.entity)
+            if piece in gap.chunks:
+                continue
+            if not any(piece in g.chunks for g in gaps):
+                cost = estimate_tokens(piece.text) + CELL_TOKENS
                 if used + cost > token_budget:
                     continue
                 used += cost
-                chunk_ids[key] = f"c{len(chosen) + 1}"
-                chosen[chunk_ids[key]] = trimmed
-            gap.chunk_ids.append(chunk_ids[key])
-            already.add(id(chunk))
-    return chosen
+            gap.chunks.append(piece)
+            seen.add(chunk.text)
+    return [gap for gap in gaps if gap.chunks]
 
 
 def _quote_ok(value, quote, chunk: Chunk) -> bool:
@@ -137,18 +130,25 @@ def _word_in_quote(word: str, quote_words: set[str]) -> bool:
     return any(re.match(r"\d+", q) and re.match(r"\d+", q).group() == word for q in quote_words)
 
 
-def _build_prompt(entity_type: str, cells: list[Gap], chunks: dict[str, Chunk]) -> str:
-    cell_rows = [
-        {"id": i, "entity": gap.entity.get_name(), "column": gap.column, "chunks": gap.chunk_ids}
-        for i, gap in enumerate(cells)
-    ]
-    used = {cid for gap in cells for cid in gap.chunk_ids}
-    chunk_rows = [{"id": cid, "text": chunk.text} for cid, chunk in chunks.items() if cid in used]
-    return (
+def _build_prompt(entity_type: str, gaps: list[Gap]) -> tuple[str, dict[str, Chunk]]:
+    chunks: dict[str, Chunk] = {}
+    cell_rows = []
+    for i, gap in enumerate(gaps):
+        refs = []
+        for chunk in gap.chunks:
+            cid = next((k for k, c in chunks.items() if c == chunk), None)
+            if cid is None:
+                cid = f"c{len(chunks) + 1}"
+                chunks[cid] = chunk
+            refs.append(cid)
+        cell_rows.append({"id": i, "entity": gap.entity.get_name(), "column": gap.column, "chunks": refs})
+    chunk_rows = [{"id": cid, "text": chunk.text} for cid, chunk in chunks.items()]
+    prompt = (
         f"Entity type: {entity_type}\n\n"
         f"CHUNKS:\n{json.dumps(chunk_rows, ensure_ascii=False)}\n\n"
         f"CELLS:\n{json.dumps(cell_rows, ensure_ascii=False)}"
     )
+    return prompt, chunks
 
 
 def _call_tokens(user: str) -> int:
@@ -162,34 +162,34 @@ async def fill_from_chunks(
     entity_type: str,
     index: ChunkIndex | None,
     token_budget: int = FILL_INPUT_TOKENS,
-    sent: dict[tuple[str, str], set[int]] | None = None,
+    tried: dict[tuple[str, str], set[str]] | None = None,
     token_limit: int = TOKENS_PER_MINUTE,
 ) -> tuple[list[Entity], int]:
     gaps = find_gaps(entities, columns)
     if not gaps or index is None or not len(index):
         return entities, 0
-    sent = {} if sent is None else sent
+    tried = {} if tried is None else tried
+    total = len(gaps)
 
     hits = await asyncio.to_thread(index.search, [_query(g) for g in gaps], SEARCH_K)
-    chunks = _attach_chunks(gaps, hits, token_budget, sent)
-    cells = [gap for gap in gaps if gap.chunk_ids]
-    if not cells:
+    gaps = _attach_chunks(gaps, hits, token_budget, tried)
+    if not gaps:
         logger.info("Fill: no new chunk mentions any entity with gaps")
         return entities, 0
 
     limit = min(token_limit, TOKENS_PER_MINUTE)
-    user = _build_prompt(entity_type, cells, chunks)
-    while len(cells) > 1 and _call_tokens(user) > limit:
-        cells = cells[:-1]
-        user = _build_prompt(entity_type, cells, chunks)
+    user_prompt, chunks = _build_prompt(entity_type, gaps)
+    while len(gaps) > 1 and _call_tokens(user_prompt) > limit:
+        gaps = gaps[:-1]
+        user_prompt, chunks = _build_prompt(entity_type, gaps)
 
     try:
-        event = await pacer.reserve(_call_tokens(user))
+        event = await pacer.reserve(_call_tokens(user_prompt))
         response = await client.chat.completions.create(
             model=FILLER_MODEL,
             messages=[
                 {"role": "system", "content": FILLER_SYSTEM_PROMPT},
-                {"role": "user", "content": user},
+                {"role": "user", "content": user_prompt},
             ],
             max_tokens=OUTPUT_TOKENS,
             reasoning_effort=LLM_REASONING,
@@ -209,13 +209,12 @@ async def fill_from_chunks(
     for row in data.get("cells", []):
         if not isinstance(row, dict) or not isinstance(row.get("id"), int):
             continue
-        if not 0 <= row["id"] < len(cells):
+        if not 0 <= row["id"] < len(gaps):
             continue
-        gap = cells[row["id"]]
-        chunk_id = row.get("chunk")
-        if chunk_id not in gap.chunk_ids:
+        gap = gaps[row["id"]]
+        chunk = chunks.get(row.get("chunk"))
+        if chunk is None or chunk not in gap.chunks:
             continue
-        chunk = chunks[chunk_id]
         value, quote = row.get("value"), row.get("quote")
         if gap.column in gap.entity.cells and not is_missing(gap.entity.cells[gap.column].value):
             continue
@@ -229,7 +228,7 @@ async def fill_from_chunks(
         )
         filled += 1
 
-    logger.info("Fill: %d of %d gaps filled from %d chunks", filled, len(gaps), len(chunks))
+    logger.info("Fill: %d of %d gaps filled from %d chunks", filled, total, len(chunks))
     return entities, filled
 
 
@@ -273,7 +272,7 @@ async def fill_loop(
     result = FillResult(entities=entities)
     if index is None:
         return result
-    sent: dict[tuple[str, str], set[int]] = {}
+    tried: dict[tuple[str, str], set[str]] = {}
 
     for round_no in range(1, max_fills + 1):
         if round_no > 1:
@@ -299,7 +298,7 @@ async def fill_loop(
         fast = max_fills == 1
         limit = pacer.available() if fast else TOKENS_PER_MINUTE
         result.entities, filled = await fill_from_chunks(
-            client, result.entities, columns, entity_type, index, _fill_budget(fast), sent, limit,
+            client, result.entities, columns, entity_type, index, _fill_budget(fast), tried, limit,
         )
         result.filled += filled
         result.rounds = round_no
